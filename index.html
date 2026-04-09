@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Seismo Monitor</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: #121212; color: #00e5ff; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+        #status { font-weight: bold; margin-bottom: 20px; color: #aaa; }
+        .box { background: #1e1e1e; padding: 15px; border-radius: 10px; display: inline-block; width: 100%; max-width: 600px; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>СЕЙСМОГРАФ</h2>
+        <div id="status">Инициализация...</div>
+        <canvas id="chart"></canvas>
+    </div>
+
+    <script>
+        const status = document.getElementById('status');
+        const ctx = document.getElementById('chart').getContext('2d');
+        
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'Ускорение Z', data: [], borderColor: '#00e5ff', tension: 0.1, borderWidth: 2, pointRadius: 0 }] },
+            options: { responsive: true, animation: false, scales: { x: { display: false } } }
+        });
+
+        // Подключаемся через протокол WSS (WebSocket Secure)
+        // HiveMQ требует путь /mqtt для порта 443
+        const options = {
+            connectTimeout: 5000,
+            clientId: 'web_' + Math.random().toString(16).slice(2, 8),
+            keepalive: 60,
+            clean: true
+        };
+
+        status.innerText = "Установка соединения...";
+
+        // Важный формат адреса для мобильных браузеров
+        const client = mqtt.connect('wss://broker.hivemq.com:443/mqtt', options);
+
+        client.on('connect', () => {
+            status.innerText = "СВЯЗЬ ЕСТЬ. Ожидание данных...";
+            status.style.color = "#00ff00";
+            client.subscribe('my_seismo/data');
+        });
+
+        client.on('message', (topic, message) => {
+            status.innerText = "ПОЛУЧЕНИЕ ДАННЫХ";
+            const val = parseFloat(message.toString());
+            
+            chart.data.labels.push("");
+            chart.data.datasets[0].data.push(val);
+            
+            if(chart.data.labels.length > 50) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+            chart.update();
+        });
+
+        client.on('error', (err) => {
+            status.innerText = "Ошибка: " + err;
+            console.error(err);
+        });
+
+        client.on('offline', () => {
+            status.innerText = "Сервер недоступен (Offline)";
+        });
+    </script>
+</body>
+</html>
