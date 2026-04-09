@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Моя Сейсмограмма</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; }
+        .container { width: 90%; max-width: 800px; margin: 20px auto; background: white; padding: 20px; border-radius: 10px; shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        #status { font-size: 0.9em; color: gray; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Сейсмограф ESP8266 + MPU6050</h1>
+        <p id="status">Подключение к датчику...</p>
+        <canvas id="seismoChart"></canvas>
+    </div>
+
+    <script>
+        const statusText = document.getElementById('status');
+        
+        // --- НАСТРОЙКИ ГРАФИКА ---
+        const ctx = document.getElementById('seismoChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], 
+                datasets: [{
+                    label: 'Ускорение (ось Z)',
+                    data: [],
+                    borderColor: '#ff3d00',
+                    backgroundColor: 'rgba(255, 61, 0, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4 // Сглаживание линии
+                }]
+            },
+            options: {
+                scales: {
+                    y: { beginAtZero: false }
+                },
+                animation: false // Отключаем анимацию для скорости
+            }
+        });
+
+        // --- НАСТРОЙКИ MQTT ---
+        // Используем публичный брокер HiveMQ через WebSockets
+        const client = new Paho.MQTT.Client("broker.hivemq.com", 8000, "client_" + Math.random().toString(16).substr(2, 8));
+
+        client.onConnectionLost = (responseObject) => {
+            statusText.innerText = "Связь потеряна: " + responseObject.errorMessage;
+        };
+
+        client.onMessageArrived = (message) => {
+            const value = parseFloat(message.payloadString);
+            const now = new Date().toLocaleTimeString();
+            
+            statusText.innerText = "Данные поступают в реальном времени";
+
+            // Добавляем данные в график
+            chart.data.labels.push(now);
+            chart.data.datasets[0].data.push(value);
+
+            // Ограничиваем количество точек на экране (например, последние 40)
+            if (chart.data.labels.length > 40) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+            chart.update();
+        };
+
+        client.connect({
+            onSuccess: () => {
+                statusText.innerText = "Подключено к серверу. Ожидание данных...";
+                client.subscribe("my_seismo/data"); // ТОПИК ДОЛЖЕН СОВПАДАТЬ С ESP8266
+            },
+            useSSL: false
+        });
+    </script>
+</body>
+</html>
