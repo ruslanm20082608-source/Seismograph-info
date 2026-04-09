@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Seismo</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: #121212; color: white; font-family: sans-serif; text-align: center; }
+        #status { color: #00e5ff; margin-top: 20px; }
+        canvas { max-width: 800px; margin: 0 auto; display: block; }
+    </style>
+</head>
+<body>
+    <h2>Сейсмограф Онлайн</h2>
+    <div id="status">Попытка подключения...</div>
+    <canvas id="chart"></canvas>
+
+    <script>
+        const status = document.getElementById('status');
+        const ctx = document.getElementById('chart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'Ускорение Z', data: [], borderColor: '#00e5ff', tension: 0.3 }] },
+            options: { animation: false }
+        });
+
+        // Используем универсальный адрес для WebSockets
+        const client = new Paho.MQTT.Client("broker.hivemq.com", 8000, "user_" + Math.random().toString(16).slice(2, 7));
+
+        function onConnect() {
+            status.innerText = "СВЯЗЬ УСТАНОВЛЕНА. Жду данные...";
+            client.subscribe("my_seismo/data");
+        }
+
+        function onFailure(err) {
+            status.innerText = "Ошибка: " + err.errorMessage + ". Проверьте интернет или смените сеть.";
+        }
+
+        client.onMessageArrived = (msg) => {
+            status.innerText = "ДАННЫЕ ПОСТУПАЮТ";
+            chart.data.labels.push("");
+            chart.data.datasets[0].data.push(parseFloat(msg.payloadString));
+            if(chart.data.labels.length > 40) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+            chart.update();
+        };
+
+        client.connect({
+            onSuccess: onConnect,
+            onFailure: onFailure,
+            useSSL: false, // Пробуем через обычный порт 8000, если 443 блокируется
+            timeout: 5
+        });
+    </script>
+</body>
+</html>
