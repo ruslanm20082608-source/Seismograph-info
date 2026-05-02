@@ -1,108 +1,160 @@
+
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Seismo Monitor Pro</title>
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { background: #121212; color: #00e5ff; font-family: sans-serif; text-align: center; margin: 0; padding: 15px; }
-        .container { background: #1e1e1e; padding: 15px; border-radius: 12px; display: inline-block; width: 100%; max-width: 900px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); }
-        #status { color: #888; font-size: 0.9em; margin-bottom: 10px; font-weight: bold; }
-        .chart-box { position: relative; height: 400px; width: 100%; }
-        h2 { font-size: 1.2em; margin: 5px 0; letter-spacing: 1px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seismo Monitor Tree Mode</title>
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+    body {
+        background: #0f0f0f;
+        color: #00e5ff;
+        font-family: sans-serif;
+        text-align: center;
+        margin: 0;
+        padding: 15px;
+    }
+
+    .container {
+        background: #1c1c1c;
+        padding: 15px;
+        border-radius: 12px;
+        max-width: 900px;
+        margin: auto;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    }
+
+    #status {
+        font-size: 0.9em;
+        margin-bottom: 10px;
+        color: #888;
+        font-weight: bold;
+    }
+
+    .chart-box {
+        position: relative;
+        height: 420px;
+        width: 100%;
+    }
+
+    h2 {
+        margin: 5px 0;
+        font-size: 1.2em;
+        letter-spacing: 1px;
+    }
+</style>
 </head>
+
 <body>
 
-    <div class="container">
-        <h2>СЕЙСМОГРАФ LIVE</h2>
-        <div id="status">Подключение...</div>
-        <div class="chart-box">
-            <canvas id="seismoChart"></canvas>
-        </div>
+<div class="container">
+    <h2>🌲 SEISMOGRAPH TREE MODE</h2>
+    <div id="status">Подключение...</div>
+
+    <div class="chart-box">
+        <canvas id="seismoChart"></canvas>
     </div>
+</div>
 
-    <script>
-        const statusText = document.getElementById('status');
-        const ctx = document.getElementById('seismoChart').getContext('2d');
+<script>
+const statusText = document.getElementById('status');
+const ctx = document.getElementById('seismoChart').getContext('2d');
 
-        // 1. Настройка графика с фиксированным масштабом
-        const chart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: Array(300).fill(""), // Сразу создаем 300 пустых точек
-                datasets: [{
-                    data: Array(300).fill(0),
-                    borderColor: '#00e5ff',
-                    backgroundColor: 'rgba(0, 229, 255, 0.05)',
-                    borderWidth: 1.5,
-                    fill: true,
-                    tension: 0.1,
-                    pointRadius: 0
-                }]
+// 📊 стартовые данные
+const DATA_SIZE = 300;
+
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: Array(DATA_SIZE).fill(""),
+        datasets: [{
+            data: Array(DATA_SIZE).fill(0),
+            borderColor: '#00e5ff',
+            backgroundColor: 'rgba(0, 229, 255, 0.25)',
+            borderWidth: 1.5,
+            fill: 'origin',        // 🌲 ключевой эффект "ёлочки"
+            tension: 0.05,
+            pointRadius: 0
+        }]
+    },
+
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+
+        scales: {
+            x: {
+                display: false
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: false,
-                scales: {
-                    x: { display: false },
-                    y: { 
-                        // МАСШТАБИРОВАНИЕ (измените эти числа, если график слишком мелкий или крупный)
-                        min: 6, 
-                        max: 9,
-                        grid: { color: '#252525' }, 
-                        ticks: { color: '#666' } 
-                    }
-                },
-                plugins: { legend: { display: false } }
+
+            y: {
+                min: -2,
+                max: 2,  // ⚠️ симметрия = красивый сейсмо-вид
+                grid: { color: '#222' },
+                ticks: { color: '#666' }
             }
-        });
+        },
 
-        // 2. Настройки подключения
-        const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
-        const options = {
-            clientId: 'web_seismo_' + Math.random().toString(16).slice(2, 8),
-            clean: true,
-            connectTimeout: 5000
-        };
+        plugins: {
+            legend: { display: false }
+        }
+    }
+});
 
-        const client = mqtt.connect(brokerUrl, options);
 
-        client.on('connect', () => {
-            statusText.innerText = "СВЯЗЬ УСТАНОВЛЕНА (Масштаб ±5)";
-            statusText.style.color = "#00ff00";
-            client.subscribe('my_seismo/data');
-        });
+// 📡 MQTT подключение
+const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
 
-        client.on('message', (topic, message) => {
-            const value = parseFloat(message.toString());
-            
-            // Добавляем новое значение и удаляем старое
-            chart.data.datasets[0].data.push(value);
-            chart.data.datasets[0].data.shift();
-            
-            // Быстрое обновление без анимации
-            chart.update('none');
-            
-            statusText.innerText = "ДАННЫЕ: " + value.toFixed(2);
-            statusText.style.color = "#00ff00";
-        });
+const client = mqtt.connect(brokerUrl, {
+    clientId: 'seismo_' + Math.random().toString(16).slice(2, 8),
+    clean: true,
+    connectTimeout: 5000
+});
 
-        client.on('error', (err) => {
-            statusText.innerText = "Ошибка: " + err;
-            statusText.style.color = "#ff4444";
-        });
+client.on('connect', () => {
+    statusText.innerText = "🟢 ONLINE (Tree Mode активен)";
+    statusText.style.color = "#00ff88";
+    client.subscribe('my_seismo/data');
+});
 
-        client.on('offline', () => {
-            statusText.innerText = "Оффлайн. Переподключение...";
-            statusText.style.color = "#ffa500";
-        });
-    </script>
+client.on('message', (topic, message) => {
+
+    // 📊 сигнал
+    let value = parseFloat(message.toString());
+
+    // ⚡ усиление сигнала (делает "горы" заметнее)
+    value = value * 3;
+
+    // 🔇 фильтр шума
+    if (Math.abs(value) < 0.02) value = 0;
+
+    const data = chart.data.datasets[0].data;
+
+    data.push(value);
+    data.shift();
+
+    chart.update('none');
+
+    statusText.innerText = "📡 VALUE: " + value.toFixed(3);
+});
+
+client.on('error', (err) => {
+    statusText.innerText = "❌ ERROR: " + err;
+    statusText.style.color = "#ff4444";
+});
+
+client.on('offline', () => {
+    statusText.innerText = "🟠 OFFLINE - reconnecting...";
+    statusText.style.color = "#ffa500";
+});
+</script>
+
 </body>
 </html>
-
 
 
