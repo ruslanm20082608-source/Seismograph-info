@@ -3,201 +3,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Сейсмограф - R864E EHZ</title>
+    <title>Онлайн Сейсмограф</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #121b22;
-            color: #e9ecef;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #111920; /* Темно-синий фон из скриншота */
+            color: #627382;
             margin: 0;
-        }
-        .seismic-card {
-            background-color: #1a242d;
-            border-radius: 12px;
             padding: 20px;
-            width: 90vw;
-            max-width: 800px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-        }
-        .header {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
+            flex-direction: column;
+            height: 90vh;
         }
-        .station-info {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        .station-icon {
-            background-color: #2e3b46;
-            border: 3px solid #7a8a99;
-            color: #ffffff;
-            font-weight: bold;
-            font-size: 1.4rem;
-            width: 50px;
-            height: 50px;
-            border-radius: 50px; /* Круглый бейдж как на скрине */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        .station-name h2 {
-            margin: 0;
-            font-size: 1.6rem;
-            letter-spacing: 0.5px;
-        }
-        .station-name p {
-            margin: 3px 0 0 0;
-            color: #8a9aa8;
-            font-size: 0.95rem;
-        }
-        .live-badge {
-            background-color: rgba(46, 139, 87, 0.2);
+        #status {
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin-bottom: 10px;
             color: #2ecd71;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 0.85rem;
-            font-weight: bold;
-            position: absolute;
-            top: 15px;
-            left: 75px;
         }
         .canvas-container {
+            flex-grow: 1;
             position: relative;
+            width: 100%;
             background-color: #111920;
-            border-radius: 6px;
-            padding: 10px;
-            border: 1px solid #23303c;
         }
         canvas {
             display: block;
             width: 100%;
-            height: 280px;
-        }
-        .footer-info {
-            display: flex;
-            justify-content: space-between;
-            color: #627382;
-            font-size: 0.85rem;
-            margin-top: 8px;
-            padding: 0 5px;
+            height: 100%;
         }
     </style>
 </head>
 <body>
 
-<div class="seismic-card">
-    <div class="header">
-        <div class="station-info">
-            <div class="station-icon">1D</div>
-            <div class="station-name">
-                <h2>R864E <span style="color:#8a9aa8; font-weight:normal;">— EHZ</span></h2>
-                <p>Kazakhstan • Elevation: 903 m</p>
-            </div>
-        </div>
-        <div style="color: #ff3344; font-size: 1.5rem;">📡</div>
-    </div>
+    <div id="status">🟢 ПОДКЛЮЧЕНИЕ К СЕТИ...</div>
 
     <div class="canvas-container">
-        <div class="live-badge" id="liveStatus">live</div>
-        <canvas id="seismicCanvas" width="1600" height="400"></canvas>
+        <canvas id="seismicCanvas"></canvas>
     </div>
-    
-    <div class="footer-info">
-        <span id="utcTime">UTC --:--:--</span>
-        <span style="background: #1c2730; padding: 2px 8px; border-radius: 10px; color:#8a9aa8;">3.0 - 20.0 Hz</span>
-    </div>
-</div>
 
 <script>
 const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
-const liveStatus = document.getElementById("liveStatus");
+const statusText = document.getElementById("status");
 
-// --- НАСТРОЙКИ СЕТКИ И ИНТЕРФЕЙСА ---
-const maxPoints = 400;         // Плотность точек на экране (чем больше, тем плотнее график)
+// Автоматическая подстройка разрешения холста под размер экрана
+function resizeCanvas() {
+    canvas.width = canvas.clientWidth * window.devicePixelRatio;
+    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    drawSeismograph();
+}
+
+// --- НАСТРОЙКИ ГРАФИКА ---
+const maxPoints = 500;         // Плотность точек на экране
 let dataHistory = Array(maxPoints).fill(0);
 
-// Настройки масштабирования под твой внутренний АЦП (*16)
-const yCenter = canvas.height / 2;
-const maxAmplitude = 50;    // Границы АЦП (обрезает график по шкале от -10 до +10 как на скрине)
+// Высокая чувствительность, чтобы линия не казалась прямой
+const maxAmplitude = 60;       
 
-// Массив меток времени по оси Х (имитация шкалы)
-let timeLabels = ["", "", "", ""];
-
-function updateUTCTime() {
-    const now = new Date();
-    document.getElementById("utcTime").innerText = "UTC " + now.toISOString().substr(11, 8);
-}
-setInterval(updateUTCTime, 1000);
-
-// --- ОТРИСОВКА ИНТЕРФЕЙСА (Один в один как на скрине) ---
 function drawSeismograph() {
-    // Очистка темным фоном
+    const yCenter = canvas.height / 2;
+
+    // Очистка фона
     ctx.fillStyle = "#111920";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 1. Рисуем горизонтальные линии шкалы (10, 5, 0, -5, -10)
-    const lines = [0.15, 0.325, 0.5, 0.675, 0.85];
+    // Рисуем горизонтальные линии шкалы (10, 5, 0, -5, -10)
+    const linePositions = [0.15, 0.325, 0.5, 0.675, 0.85];
     const labels = ["10", "5", "0", "-5", "-10"];
     
     ctx.strokeStyle = "#1c2730";
-    ctx.lineWidth = 1;
-    ctx.font = "24px sans-serif";
+    ctx.lineWidth = window.devicePixelRatio;
+    ctx.font = `${14 * window.devicePixelRatio}px sans-serif`;
     ctx.fillStyle = "#627382";
 
-    lines.forEach((pos, idx) => {
+    linePositions.forEach((pos, idx) => {
         let y = canvas.height * pos;
-        // Линия
         ctx.beginPath();
-        ctx.moveTo(80, y);
+        ctx.moveTo(60 * window.devicePixelRatio, y);
         ctx.lineTo(canvas.width, y);
         ctx.stroke();
-        // Текст шкалы слева
-        ctx.fillText(labels[idx], 20, y + 8);
+        
+        // Цифры шкалы слева
+        ctx.fillText(labels[idx], 15 * window.devicePixelRatio, y + (5 * window.devicePixelRatio));
     });
 
-    // Текст оси ординат
-    ctx.save();
-    ctx.translate(25, canvas.height / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.font = "22px sans-serif";
-    ctx.fillText("(μm/s)", -40, -5);
-    ctx.restore();
-
-    // 2. Рисуем вертикальные сетки времени
-    ctx.strokeStyle = "rgba(35, 48, 60, 0.4)";
-    for(let i = 1; i < 4; i++) {
-        let x = 80 + (canvas.width - 80) * (i / 4);
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
-    }
-
-    // 3. Рисуем саму РОЗОВУЮ сейсмическую линию
+    // Рисуем РОЗОВУЮ сейсмическую линию (вид как на скрине)
     ctx.beginPath();
-    ctx.strokeStyle = "#ff5376"; // Фирменный розовый цвет линии
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "#ff5376"; // Розовый цвет трека
+    ctx.lineWidth = 2 * window.devicePixelRatio;
     ctx.lineJoin = "round";
 
-    const stepX = (canvas.width - 90) / (maxPoints - 1);
+    const startX = 60 * window.devicePixelRatio;
+    const stepX = (canvas.width - startX) / (maxPoints - 1);
     
     for (let i = 0; i < maxPoints; i++) {
-        let x = 80 + i * stepX;
-        // Преобразуем значение АЦП в пиксели холста
+        let x = startX + i * stepX;
         let val = dataHistory[i];
-        // Нормализация под масштаб холста (шкала от 0.15 до 0.85)
+        
+        // Масштабирование под холст
         let y = yCenter - (val / maxAmplitude) * (canvas.height * 0.35);
         
-        // Ограничители, чтобы линия не вылетала за шкалу 10 и -10
+        // Ограничители по краям шкалы
         if (y < canvas.height * 0.12) y = canvas.height * 0.12;
         if (y > canvas.height * 0.88) y = canvas.height * 0.88;
 
@@ -207,22 +115,17 @@ function drawSeismograph() {
     ctx.stroke();
 }
 
-// Первый запуск пустого интерфейса
-drawSeismograph();
-
 // --- НАСТРОЙКИ MQTT ---
-const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
+const brokerUrl = "wss://broker.hivemq.com:443/mqtt"; // Стабильный порт 443
 const topic = "esp32s3/seismic/geophone";
 const client = mqtt.connect(brokerUrl);
 
-// Смягчающий фильтр
 let smoothedValue = 0;
-const k = 0.4; // Чуть увеличил для четкости пиков
+const k = 0.4; // Коэффициент фильтрации шума
 
 client.on('connect', () => {
-    liveStatus.innerText = "live";
-    liveStatus.style.backgroundColor = "rgba(46, 139, 87, 0.2)";
-    liveStatus.style.color = "#2ecd71";
+    statusText.innerText = "🟢 ОНЛАЙН — Прием сейсмограммы...";
+    statusText.style.color = "#2ecd71";
     client.subscribe(topic);
 });
 
@@ -230,26 +133,26 @@ client.on('message', (receivedTopic, topicMessage) => {
     const rawValue = parseInt(topicMessage.toString());
     
     if (!isNaN(rawValue)) {
-        // Фильтруем шум
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
 
-        // Добавляем точку в конец и сдвигаем историю (эффект осциллографа влево)
+        // Сдвиг данных влево
         dataHistory.shift();
         dataHistory.push(smoothedValue);
 
-        // Перерисовываем экран
+        // Перерисовка графика
         drawSeismograph();
     }
 });
 
 client.on('offline', () => {
-    liveStatus.innerText = "offline";
-    liveStatus.style.backgroundColor = "rgba(255, 68, 68, 0.2)";
-    liveStatus.style.color = "#ff4444";
+    statusText.innerText = "🟠 ОФФЛАЙН — Потеря связи с брокером";
+    statusText.style.color = "#ffa500";
 });
+
+// Следим за изменением размеров окна браузера
+window.addEventListener('resize', resizeCanvas);
+window.onload = resizeCanvas;
 </script>
 
 </body>
 </html>
-
-    
