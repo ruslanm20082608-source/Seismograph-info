@@ -3,125 +3,169 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32-S3 Онлайн Сейсмограф</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>Барабанный Сейсмограф (Ёлочка)</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #1e1e24;
-            color: #f5f5f5;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #111116;
+            color: #d5d5d5;
             text-align: center;
-            padding: 20px;
+            padding: 10px;
+            margin: 0;
         }
-        h1 { color: #4caf50; }
-        #status {
-            font-size: 1.2rem;
-            font-weight: bold;
-            margin: 15px 0;
-            color: #ffa500;
-        }
-        .chart-container {
-            position: relative;
+        h1 { color: #ff5533; font-size: 1.5rem; margin-bottom: 5px; }
+        #status { font-size: 1rem; margin-bottom: 15px; color: #ffa500; }
+        .canvas-container {
+            width: 95vw;
             margin: auto;
-            height: 40vh;
-            width: 80vw;
-            background: #2a2a32;
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            background: #1a1a22;
+            border: 2px solid #333344;
+            border-radius: 6px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: auto;
         }
     </style>
 </head>
 <body>
 
-    <h1>🌋 Мониторинг сейсмической активности</h1>
-    <div id="status">🟠 Подключение к брокеру...</div>
+    <h1>🌋 СЕЙСМОГРАММА ("ЕЛОЧКА")</h1>
+    <div id="status">🟠 Подключение к сейсмостанции...</div>
 
-    <div class="chart-container">
-        <canvas id="seismicChart"></canvas>
+    <div class="canvas-container">
+        <canvas id="seismicCanvas" width="1200" height="600"></canvas>
     </div>
 
 <script>
 const statusText = document.getElementById("status");
+const canvas = document.getElementById("seismicCanvas");
+const ctx = canvas.getContext("2d");
 
-// --- Настройки подключения к HiveMQ WebSockets ---
+// --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
+const totalLines = 15;        // Сколько строк (треков) отображать на экране
+const amplitudeScale = 0.15;   // Чувствительность (уменьши, если линии сильно перехлестываются)
+const speed = 2;              // Скорость бега линии (в пикселях за одну точку)
+
+// Рассчитываем расстояние между строками
+const lineSpacing = canvas.height / (totalLines + 1);
+
+// Массив для хранения истории строк
+let currentLineIdx = 0;
+let currentX = 0;
+let lastY = 0;
+
+// Инициализируем фоновую сетку (барабан)
+function drawBackground() {
+    ctx.fillStyle = "#1a1a22";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Рисуем тонкие линии строк
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= totalLines; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, i * lineSpacing);
+        ctx.lineTo(canvas.width, i * lineSpacing);
+        ctx.stroke();
+    }
+}
+
+// Стираем небольшой кусочек впереди идущей линии (эффект луча осциллографа)
+function clearAhead(x, lineIdx) {
+    const yCenter = (lineIdx + 1) * lineSpacing;
+    ctx.fillStyle = "#1a1a22";
+    // Очищаем прямоугольник перед маркером
+    ctx.fillRect(x, yCenter - lineSpacing/2, 25, lineSpacing - 2);
+}
+
+// Очистка при первом старте
+drawBackground();
+
+// --- НАСТРОЙКИ MQTT ---
 const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
 const topic = "esp32s3/seismic/geophone";
-
 const client = mqtt.connect(brokerUrl);
 
-// --- Настройка графика Chart.js ---
-const ctx = document.getElementById('seismicChart').getContext('2d');
-const maxDataPoints = 100; // Сколько точек одновременно отображать на экране
+// Фильтр сглаживания (чтобы убрать цифровой зуд)
+let smoothedValue = 0;
+const k = 0.2; 
 
-const seismicChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: Array(maxDataPoints).fill(""), // Пустые метки времени для плавности
-        datasets: [{
-            label: 'Сигнал геофона (Разность АЦП x16)',
-            data: Array(maxDataPoints).fill(0),
-            borderColor: '#4caf50',
-            borderWidth: 2,
-            pointRadius: 0, // Убираем точки, оставляем только линию
-            fill: false,
-            tension: 0.2 // Легкое сглаживание линии
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-            y: {
-                grid: { color: '#3a3a42' },
-                ticks: { color: '#b5b5b5' },
-                // Автоматическое масштабирование, чтобы линия «дышала» при ударе
-                suggestedMin: -500,
-                suggestedMax: 500
-            },
-            x: { display: false } // Прячем нижнюю ось
-        },
-        plugins: {
-            legend: { labels: { color: '#fff' } }
+client.on('connect', () => {
+    statusText.innerText = "🟢 СЕЙСМОСТАНЦИЯ ОНЛАЙН. ЗАПИСЬ ...";
+    statusText.style.color = "#4caf50";
+    client.subscribe(topic);
+    
+    // Начальная точка
+    lastY = (currentLineIdx + 1) * lineSpacing;
+});
+
+client.on('message', (receivedTopic, topicMessage) => {
+    const rawValue = parseInt(topicMessage.toString());
+    
+    if (!isNaN(rawValue)) {
+        // Применяем сглаживание
+        smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
+        
+        statusText.innerText = "📡 АМПЛИТУДА: " + Math.round(smoothedValue);
+
+        // Рассчитываем базовый Y для текущей строки
+        const yCenter = (currentLineIdx + 1) * lineSpacing;
+        // Добавляем смещение от геофона (вверх-вниз)
+        const nextY = yCenter - (smoothedValue * amplitudeScale);
+
+        // Очищаем холст прямо перед нашей линией
+        clearAhead(currentX, currentLineIdx);
+
+        // Рисуем сегмент сейсмограммы
+        ctx.beginPath();
+        ctx.strokeStyle = currentLineIdx % 2 === 0 ? "#4caf50" : "#3399ff"; // Строки чередуют цвет (зеленый/синий) для удобства
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(currentX, lastY);
+        ctx.lineTo(currentX + speed, nextY);
+        ctx.stroke();
+
+        // Рисуем яркую точку-маркер текущего времени
+        ctx.fillStyle = "#ff3333";
+        ctx.fillRect(currentX + speed, nextY - 2, 3, 3);
+
+        // Обновляем координаты
+        currentX += speed;
+        lastY = nextY;
+
+        // ЕСЛИ ЛИНИЯ ДОШЛА ДО КРАЯ ЭКРАНА — ПЕРЕХОДИМ НА СЛЕДУЮЩУЮ СТРОКУ
+        if (currentX >= canvas.width) {
+            currentX = 0;
+            currentLineIdx++;
+            
+            // Если барабан заполнился, стираем всё и начинаем сверху
+            if (currentLineIdx >= totalLines) {
+                currentLineIdx = 0;
+                drawBackground();
+            }
+            
+            // Переносим координату Y на начало новой строки
+            lastY = (currentLineIdx + 1) * lineSpacing;
         }
     }
 });
 
-// --- Обработка событий MQTT ---
-client.on('connect', () => {
-    statusText.innerText = "🟢 ПОДКЛЮЧЕНО. Ожидание данных...";
-    statusText.style.color = "#4caf50";
-    client.subscribe(topic);
-});
-
-client.on('message', (receivedTopic, topicMessage) => {
-    // Получаем число из ESP32-S3
-    const value = parseInt(topicMessage.toString());
-    
-    if (!isNaN(value)) {
-        statusText.innerText = "📡 VALUE: " + value;
-        statusText.style.color = "#4caf50";
-
-        // Сдвигаем график влево (удаляем старую точку, добавляем новую)
-        seismicChart.data.datasets[0].data.shift();
-        seismicChart.data.datasets[0].data.push(value);
-        seismicChart.update('none'); // Быстрое обновление без анимации задержки
-    }
-});
-
 client.on('error', (err) => {
-    statusText.innerText = "❌ ERROR: " + err;
+    statusText.innerText = "❌ ОШИБКА СЕТИ: " + err;
     statusText.style.color = "#ff4444";
 });
 
 client.on('offline', () => {
-    statusText.innerText = "🟠 OFFLINE - reconnecting...";
+    statusText.innerText = "🟠 СВЯЗЬ ПОТЕРЯНА - Переподключение...";
     statusText.style.color = "#ffa500";
 });
 </script>
 
 </body>
 </html>
+
 
 
