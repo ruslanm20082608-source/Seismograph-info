@@ -3,30 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Онлайн Сейсмограф</title>
+    <title>SG24 life — Онлайн Сейсмограф</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #111920; /* Темно-синий фон из скриншота */
+            background-color: #111920; 
             color: #627382;
             margin: 0;
             padding: 20px;
             display: flex;
             flex-direction: column;
-            height: 90vh;
+            height: 92vh;
+            overflow: hidden;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 0 10px;
+        }
+        .logo {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 1px;
         }
         #status {
-            font-size: 1.1rem;
+            font-size: 0.9rem;
             font-weight: 500;
-            margin-bottom: 10px;
             color: #2ecd71;
+            background: rgba(46, 205, 113, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
         }
         .canvas-container {
             flex-grow: 1;
             position: relative;
             width: 100%;
             background-color: #111920;
+            border: 1px solid #1c2730;
+            border-radius: 8px;
         }
         canvas {
             display: block;
@@ -37,7 +56,10 @@
 </head>
 <body>
 
-    <div id="status">🟢 ПОДКЛЮЧЕНИЕ К СЕТИ...</div>
+    <header>
+        <div class="logo">SG24 life</div>
+        <div id="status">🟢 ПОДКЛЮЧЕНИЕ К СЕТИ...</div>
+    </header>
 
     <div class="canvas-container">
         <canvas id="seismicCanvas"></canvas>
@@ -48,75 +70,146 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("status");
 
-// Автоматическая подстройка разрешения холста под размер экрана
+// Настройки разрешения
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     drawSeismograph();
 }
 
-// --- НАСТРОЙКИ ГРАФИКА ---
-const maxPoints = 500;         // Плотность точек на экране
-let dataHistory = Array(maxPoints).fill(0);
+// --- НАСТРОЙКИ КЛАССИЧЕСКОЙ СЕЙСМОГРАММЫ ---
+const numLines = 8;             // Количество строк на барабане
+const pointsPerLine = 400;      // Количество точек в одной строке
+const totalPoints = numLines * pointsPerLine;
 
-// Высокая чувствительность, чтобы линия не казалась прямой
-const maxAmplitude = 60;       
+let dataHistory = Array(totalPoints).fill(0);
+let currentIndex = 0;           // Индекс текущей записываемой точки
+const maxAmplitude = 50;        // Чувствительность (масштаб мм/с²)
 
 function drawSeismograph() {
-    const yCenter = canvas.height / 2;
-
-    // Очистка фона
+    // Очистка экрана
     ctx.fillStyle = "#111920";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Рисуем горизонтальные линии шкалы (10, 5, 0, -5, -10)
-    const linePositions = [0.15, 0.325, 0.5, 0.675, 0.85];
-    const labels = ["10", "5", "0", "-5", "-10"];
-    
-    ctx.strokeStyle = "#1c2730";
-    ctx.lineWidth = window.devicePixelRatio;
-    ctx.font = `${14 * window.devicePixelRatio}px sans-serif`;
-    ctx.fillStyle = "#627382";
+    const paddingLeft = 70 * window.devicePixelRatio;
+    const paddingRight = 20 * window.devicePixelRatio;
+    const graphWidth = canvas.width - paddingLeft - paddingRight;
+    const graphHeight = canvas.height;
+    const rowHeight = graphHeight / (numLines + 1);
 
-    linePositions.forEach((pos, idx) => {
-        let y = canvas.height * pos;
+    // 1. СЕТКА И ОСИ (Амплитуда Y и Время X)
+    ctx.lineWidth = 1 * window.devicePixelRatio;
+    ctx.font = `${11 * window.devicePixelRatio}px monospace`;
+
+    for (let r = 0; r < numLines; r++) {
+        let yCenter = rowHeight * (r + 1);
+
+        // Горизонтальная нулевая ось для каждой строки
+        ctx.strokeStyle = "#1c2730";
         ctx.beginPath();
-        ctx.moveTo(60 * window.devicePixelRatio, y);
-        ctx.lineTo(canvas.width, y);
+        ctx.moveTo(paddingLeft, yCenter);
+        ctx.lineTo(canvas.width - paddingRight, yCenter);
         ctx.stroke();
-        
-        // Цифры шкалы слева
-        ctx.fillText(labels[idx], 15 * window.devicePixelRatio, y + (5 * window.devicePixelRatio));
-    });
 
-    // Рисуем РОЗОВУЮ сейсмическую линию (вид как на скрине)
-    ctx.beginPath();
-    ctx.strokeStyle = "#ff5376"; // Розовый цвет трека
-    ctx.lineWidth = 2 * window.devicePixelRatio;
-    ctx.lineJoin = "round";
+        // Метки оси Y (Амплитуда в мм/с²) на первой и центральной строках
+        if (r === 0 || r === Math.floor(numLines / 2)) {
+            ctx.fillStyle = "#415161";
+            ctx.fillText(`+${maxAmplitude}`, paddingLeft - 55 * window.devicePixelRatio, yCenter - rowHeight * 0.3);
+            ctx.fillText(`0 мм/с²`, paddingLeft - 55 * window.devicePixelRatio, yCenter + 4 * window.devicePixelRatio);
+            ctx.fillText(`-${maxAmplitude}`, paddingLeft - 55 * window.devicePixelRatio, yCenter + rowHeight * 0.3);
+        }
 
-    const startX = 60 * window.devicePixelRatio;
-    const stepX = (canvas.width - startX) / (maxPoints - 1);
-    
-    for (let i = 0; i < maxPoints; i++) {
-        let x = startX + i * stepX;
-        let val = dataHistory[i];
-        
-        // Масштабирование под холст
-        let y = yCenter - (val / maxAmplitude) * (canvas.height * 0.35);
-        
-        // Ограничители по краям шкалы
-        if (y < canvas.height * 0.12) y = canvas.height * 0.12;
-        if (y > canvas.height * 0.88) y = canvas.height * 0.88;
-
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        // Метки оси X (Время) на самой нижней строке
+        if (r === numLines - 1) {
+            ctx.fillStyle = "#627382";
+            const totalSeconds = 30; // Условный интервал развертки строки в секундах
+            for (let s = 0; s <= 4; s++) {
+                let x = paddingLeft + (graphWidth * (s / 4));
+                let secLabel = ((s / 4) * totalSeconds).toFixed(0) + "с";
+                ctx.fillText(secLabel, x - 10 * window.devicePixelRatio, yCenter + rowHeight * 0.5);
+                
+                // Маленькие засечки времени
+                ctx.strokeStyle = "#415161";
+                ctx.beginPath();
+                ctx.moveTo(x, yCenter + rowHeight * 0.1);
+                ctx.lineTo(x, yCenter + rowHeight * 0.25);
+                ctx.stroke();
+            }
+        }
     }
-    ctx.stroke();
+
+    // 2. ОТРИСОВКА НЕПРЕРЫВНОЙ СЕЙСМИЧЕСКОЙ ЛИНИИ
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+
+    for (let r = 0; r < numLines; r++) {
+        ctx.beginPath();
+        
+        // Чем дальше строка от текущей записи, тем она тускнее (эффект старения бумаги)
+        let currentWritingRow = Math.floor(currentIndex / pointsPerLine);
+        let age = (currentWritingRow - r + numLines) % numLines;
+        
+        if (age === 0 && currentIndex % pointsPerLine === 0) age = numLines; // Коррекция стыка
+
+        if (r === currentWritingRow) {
+            ctx.strokeStyle = "#ff5376"; // Текущая строка — ярко-розовая
+            ctx.lineWidth = 1.5 * window.devicePixelRatio;
+        } else {
+            // Затухание старых строк
+            let alpha = Math.max(0.1, 1 - (age * 0.12));
+            ctx.strokeStyle = `rgba(255, 83, 118, ${alpha})`;
+            ctx.lineWidth = 1 * window.devicePixelRatio;
+        }
+
+        let yCenter = rowHeight * (r + 1);
+        let firstPointInRow = true;
+
+        for (let p = 0; p < pointsPerLine; p++) {
+            let globalIdx = r * pointsPerLine + p;
+            
+            // Пропуск еще не записанных точек при самом первом запуске
+            if (globalIdx > currentIndex && dataHistory[globalIdx] === 0) continue;
+
+            // Не рисуем линию в точке, которая прямо сейчас перезаписывается
+            if (globalIdx === currentIndex) {
+                firstPointInRow = true;
+                continue;
+            }
+
+            let x = paddingLeft + (p / (pointsPerLine - 1)) * graphWidth;
+            let val = dataHistory[globalIdx];
+            
+            // Вычисление Y с ограничением, чтобы треки не перекрывали друг друга слишком сильно
+            let yOffset = (val / maxAmplitude) * (rowHeight * 0.45);
+            let y = yCenter - yOffset;
+
+            if (firstPointInRow) {
+                ctx.moveTo(x, y);
+                firstPointInRow = false;
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    }
+
+    // 3. МАРКЕР ТЕКУЩЕЙ ЗАПИСИ (мигающая точка пера)
+    let curRow = Math.floor(currentIndex / pointsPerLine);
+    let curPoint = currentIndex % pointsPerLine;
+    let markerX = paddingLeft + (curPoint / (pointsPerLine - 1)) * graphWidth;
+    let markerY = rowHeight * (curRow + 1) - (dataHistory[currentIndex] / maxAmplitude) * (rowHeight * 0.45);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowBlur = 10 * window.devicePixelRatio;
+    ctx.shadowColor = "#ff5376";
+    ctx.beginPath();
+    ctx.arc(markerX, markerY, 3 * window.devicePixelRatio, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0; // Сброс тени, чтобы не тормозило
 }
 
-// --- НАСТРОЙКИ MQTT ---
-const brokerUrl = "wss://broker.hivemq.com:443/mqtt"; // Стабильный порт 443
+// --- НАСТРОЙКИ MQTT BROKER ---
+const brokerUrl = "wss://broker.hivemq.com:443/mqtt"; 
 const topic = "esp32s3/seismic/geophone";
 const client = mqtt.connect(brokerUrl);
 
@@ -124,8 +217,9 @@ let smoothedValue = 0;
 const k = 0.4; // Коэффициент фильтрации шума
 
 client.on('connect', () => {
-    statusText.innerText = "🟢 ОНЛАЙН — Прием сейсмограммы...";
+    statusText.innerText = "🟢 ОНЛАЙН";
     statusText.style.color = "#2ecd71";
+    statusText.style.background = "rgba(46, 205, 113, 0.1)";
     client.subscribe(topic);
 });
 
@@ -135,21 +229,23 @@ client.on('message', (receivedTopic, topicMessage) => {
     if (!isNaN(rawValue)) {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
 
-        // Сдвиг данных влево
-        dataHistory.shift();
-        dataHistory.push(smoothedValue);
+        // Запись в текущий индекс циклического буфера барабана
+        dataHistory[currentIndex] = smoothedValue;
+        
+        // Сдвиг указателя записи вперед
+        currentIndex = (currentIndex + 1) % totalPoints;
 
-        // Перерисовка графика
+        // Перерисовка
         drawSeismograph();
     }
 });
 
 client.on('offline', () => {
-    statusText.innerText = "🟠 ОФФЛАЙН — Потеря связи с брокером";
+    statusText.innerText = "🟠 ОФФЛАЙН";
     statusText.style.color = "#ffa500";
+    statusText.style.background = "rgba(255, 165, 0, 0.1)";
 });
 
-// Следим за изменением размеров окна браузера
 window.addEventListener('resize', resizeCanvas);
 window.onload = resizeCanvas;
 </script>
