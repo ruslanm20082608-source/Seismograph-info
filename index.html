@@ -3,41 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Барабанный Сейсмограф (Ёлочка)</title>
+    <title>SG24 life — Онлайн Сейсмограф</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body {
-            font-family: 'Courier New', Courier, monospace;
-            background-color: #111116;
-            color: #d5d5d5;
-            text-align: center;
-            padding: 10px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #111920; 
+            color: #627382;
             margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 92vh;
+            overflow: hidden;
         }
-        h1 { color: #ff5533; font-size: 1.5rem; margin-bottom: 5px; }
-        #status { font-size: 1rem; margin-bottom: 15px; color: #ffa500; }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 0 10px;
+        }
+        .logo {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 1px;
+        }
+        #status {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #ffa500;
+            background: rgba(255, 165, 0, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+        }
         .canvas-container {
-            width: 95vw;
-            margin: auto;
-            background: #1a1a22;
-            border: 2px solid #333344;
-            border-radius: 6px;
-            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+            flex-grow: 1;
+            position: relative;
+            width: 100%;
+            background-color: #111920;
+            border: 1px solid #1c2730;
+            border-radius: 8px;
         }
         canvas {
             display: block;
             width: 100%;
-            height: auto;
+            height: 100%;
         }
     </style>
 </head>
 <body>
 
-    <h1>🌋 КЛАССИЧЕСКАЯ БАРАБАННАЯ СЕЙСМОГРАММА ("ЕЛОЧКА")</h1>
-    <div id="status">🟠 Подключение к сейсмостанции...</div>
+    <header>
+        <div class="logo">SG24 life</div>
+        <div id="status">🟠 ПОДКЛЮЧЕНИЕ К СЕЙСМОСТАНЦИИ...</div>
+    </header>
 
     <div class="canvas-container">
-        <canvas id="seismicCanvas" width="1200" height="600"></canvas>
+        <canvas id="seismicCanvas"></canvas>
     </div>
 
 <script>
@@ -46,122 +71,136 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 15;        // Сколько строк (треков) отображать на экране
-const amplitudeScale = 0.15;   // Чувствительность (уменьши, если линии сильно перехлестываются)
-const speed = 2;              // Скорость бега линии (в пикселях за одну точку)
+const totalLines = 12;         // Количество строк на экране
+const maxAmplitude = 50;       // Максимальная амплитуда (ось Y) в мм/с²
+const speed = 2;               // Скорость движения пера (пикселей за шаг)
 
-// Рассчитываем расстояние между строками
-const lineSpacing = canvas.height / (totalLines + 1);
-
-// Массив для хранения истории строк
+let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
 let lastY = 0;
 
-// Инициализируем фоновую сетку (барабан)
+function resizeCanvas() {
+    canvas.width = canvas.clientWidth * window.devicePixelRatio;
+    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    lineSpacing = canvas.height / (totalLines + 1);
+    drawBackground();
+    lastY = (currentLineIdx + 1) * lineSpacing;
+}
+
+// Фоновая сетка барабана
 function drawBackground() {
-    ctx.fillStyle = "#1a1a22";
+    ctx.fillStyle = "#111920";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Рисуем тонкие линии строк
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#1c2730";
+    ctx.lineWidth = 1 * window.devicePixelRatio;
+    
     for (let i = 1; i <= totalLines; i++) {
         ctx.beginPath();
-        ctx.moveTo(0, i * lineSpacing);
+        ctx.moveTo(70 * window.devicePixelRatio, i * lineSpacing);
         ctx.lineTo(canvas.width, i * lineSpacing);
         ctx.stroke();
     }
+    
+    // Вывод разметки оси Y (Амплитуда) и оси Х (Время)
+    ctx.fillStyle = "#415161";
+    ctx.font = `${10 * window.devicePixelRatio}px monospace`;
+    for (let i = 1; i <= totalLines; i += 4) {
+        ctx.fillText(`+${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) - lineSpacing * 0.25);
+        ctx.fillText(`0 мм/с²`, 15 * window.devicePixelRatio, (i * i * 0) + (i * lineSpacing) + 3 * window.devicePixelRatio);
+        ctx.fillText(`-${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) + lineSpacing * 0.3);
+    }
 }
 
-// Стираем небольшой кусочек впереди идущей линии (эффект луча осциллографа)
+// Эффект луча осциллографа (стирание старого перед пером)
 function clearAhead(x, lineIdx) {
     const yCenter = (lineIdx + 1) * lineSpacing;
-    ctx.fillStyle = "#1a1a22";
-    // Очищаем прямоугольник перед маркером
-    ctx.fillRect(x, yCenter - lineSpacing/2, 25, lineSpacing - 2);
+    ctx.fillStyle = "#111920";
+    ctx.fillRect(x, yCenter - lineSpacing/2, 30 * window.devicePixelRatio, lineSpacing - 2);
 }
 
-// Очистка при первом старте
-drawBackground();
-
-// --- НАСТРОЙКИ MQTT ---
+// --- НАСТРОЙКИ MQTT БРОКЕРА ---
 const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
 const topic = "esp32s3/seismic/geophone";
-const client = mqtt.connect(brokerUrl);
 
-// Фильтр сглаживания (чтобы убрать цифровой зуд)
+const options = {
+    connectTimeout: 5000,
+    clientId: 'SG24_Life_Drum_' + Math.random().toString(16).substr(2, 8),
+    keepalive: 60,
+    clean: true
+};
+
+const client = mqtt.connect(brokerUrl, options);
+
 let smoothedValue = 0;
-const k = 0.2; 
+const k = 0.3; // Фильтрация шумов
 
 client.on('connect', () => {
-    statusText.innerText = "🟢 СЕЙСМОСТАНЦИЯ ОНЛАЙН. ЗАПИСЬ НА БАРАБАН...";
-    statusText.style.color = "#4caf50";
+    statusText.innerText = "🟢 ОНЛАЙН — Идет непрерывная запись...";
+    statusText.style.color = "#2ecd71";
+    statusText.style.background = "rgba(46, 205, 113, 0.1)";
     client.subscribe(topic);
-    
-    // Начальная точка
-    lastY = (currentLineIdx + 1) * lineSpacing;
 });
 
 client.on('message', (receivedTopic, topicMessage) => {
-    const rawValue = parseInt(topicMessage.toString());
+    // ВАЖНО: Читаем как дробное число (parseFloat вместо parseInt)
+    const rawValue = parseFloat(topicMessage.toString());
     
     if (!isNaN(rawValue)) {
-        // Применяем сглаживание
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
         
-        statusText.innerText = "📡 АМПЛИТУДА: " + Math.round(smoothedValue);
+        const startX = 70 * window.devicePixelRatio;
+        if (currentX < startX) currentX = startX;
 
-        // Рассчитываем базовый Y для текущей строки
         const yCenter = (currentLineIdx + 1) * lineSpacing;
-        // Добавляем смещение от геофона (вверх-вниз)
-        const nextY = yCenter - (smoothedValue * amplitudeScale);
+        
+        // Масштабирование под размер строки на экране
+        const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
+        const nextY = yCenter - (smoothedValue * dynamicScale);
 
-        // Очищаем холст прямо перед нашей линией
         clearAhead(currentX, currentLineIdx);
 
-        // Рисуем сегмент сейсмограммы
+        // Отрисовка РОЗОВОГО трека сейсмограммы
         ctx.beginPath();
-        ctx.strokeStyle = currentLineIdx % 2 === 0 ? "#4caf50" : "#3399ff"; // Строки чередуют цвет (зеленый/синий) для удобства
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#ff5376"; 
+        ctx.lineWidth = 1.5 * window.devicePixelRatio;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
         ctx.moveTo(currentX, lastY);
         ctx.lineTo(currentX + speed, nextY);
         ctx.stroke();
 
-        // Рисуем яркую точку-маркер текущего времени
-        ctx.fillStyle = "#ff3333";
-        ctx.fillRect(currentX + speed, nextY - 2, 3, 3);
+        // Яркий маркер текущего положения пера
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(currentX + speed, nextY - 1.5 * window.devicePixelRatio, 3 * window.devicePixelRatio, 3 * window.devicePixelRatio);
 
-        // Обновляем координаты
         currentX += speed;
         lastY = nextY;
 
-        // ЕСЛИ ЛИНИЯ ДОШЛА ДО КРАЯ ЭКРАНА — ПЕРЕХОДИМ НА СЛЕДУЮЩУЮ СТРОКУ
-        if (currentX >= canvas.width) {
-            currentX = 0;
+        // Переход на новую строку при достижении правого края
+        if (currentX >= canvas.width - 10) {
+            currentX = startX;
             currentLineIdx++;
             
-            // Если барабан заполнился, стираем всё и начинаем сверху
             if (currentLineIdx >= totalLines) {
                 currentLineIdx = 0;
                 drawBackground();
             }
             
-            // Переносим координату Y на начало новой строки
             lastY = (currentLineIdx + 1) * lineSpacing;
         }
     }
 });
 
-client.on('error', (err) => {
-    statusText.innerText = "❌ ОШИБКА СЕТИ: " + err;
-    statusText.style.color = "#ff4444";
+client.on('offline', () => {
+    statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
+    statusText.style.color = "#ffa500";
+    statusText.style.background = "rgba(255, 165, 0, 0.1)";
 });
 
-client.on('offline', () => {
-    statusText.innerText = "🟠 СВЯЗЬ ПОТЕРЯНА - Переподключение...";
-    statusText.style.color = "#ffa500";
-});
+window.addEventListener('resize', resizeCanvas);
+window.onload = resizeCanvas;
 </script>
 
 </body>
