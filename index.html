@@ -3,145 +3,166 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SG24 life — Онлайн Сейсмограф</title>
+    <title>Барабанный Сейсмограф (Ёлочка)</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #111920; 
-            color: #627382;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #111116;
+            color: #d5d5d5;
+            text-align: center;
+            padding: 10px;
             margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            height: 92vh;
-            overflow: hidden;
         }
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            padding: 0 10px;
-        }
-        .logo {
-            font-size: 1.4rem;
-            font-weight: 700;
-            color: #ffffff;
-            letter-spacing: 1px;
-        }
-        #status {
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: #ffa500;
-            background: rgba(255, 165, 0, 0.1);
-            padding: 6px 12px;
-            border-radius: 20px;
-            transition: all 0.3s ease;
-        }
+        h1 { color: #ff5533; font-size: 1.5rem; margin-bottom: 5px; }
+        #status { font-size: 1rem; margin-bottom: 15px; color: #ffa500; }
         .canvas-container {
-            flex-grow: 1;
-            position: relative;
-            width: 100%;
-            background-color: #111920;
-            border: 1px solid #1c2730;
-            border-radius: 8px;
+            width: 95vw;
+            margin: auto;
+            background: #1a1a22;
+            border: 2px solid #333344;
+            border-radius: 6px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
         }
         canvas {
             display: block;
             width: 100%;
-            height: 100%;
+            height: auto;
         }
     </style>
 </head>
 <body>
 
-    <header>
-        <div class="logo">SG24 life</div>
-        <div id="status">🟠 ПОДКЛЮЧЕНИЕ...</div>
-    </header>
+    <h1>🌋 КЛАССИЧЕСКАЯ БАРАБАННАЯ СЕЙСМОГРАММА ("ЕЛОЧКА")</h1>
+    <div id="status">🟠 Подключение к сейсмостанции...</div>
 
     <div class="canvas-container">
-        <canvas id="seismicCanvas"></canvas>
+        <canvas id="seismicCanvas" width="1200" height="600"></canvas>
     </div>
 
 <script>
+const statusText = document.getElementById("status");
 const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
-const statusText = document.getElementById("status");
 
-function resizeCanvas() {
-    canvas.width = canvas.clientWidth * window.devicePixelRatio;
-    canvas.height = canvas.clientHeight * window.devicePixelRatio;
-    drawSeismograph();
+// --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
+const totalLines = 15;        // Сколько строк (треков) отображать на экране
+const amplitudeScale = 0.15;   // Чувствительность (уменьши, если линии сильно перехлестываются)
+const speed = 2;              // Скорость бега линии (в пикселях за одну точку)
+
+// Рассчитываем расстояние между строками
+const lineSpacing = canvas.height / (totalLines + 1);
+
+// Массив для хранения истории строк
+let currentLineIdx = 0;
+let currentX = 0;
+let lastY = 0;
+
+// Инициализируем фоновую сетку (барабан)
+function drawBackground() {
+    ctx.fillStyle = "#1a1a22";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Рисуем тонкие линии строк
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= totalLines; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, i * lineSpacing);
+        ctx.lineTo(canvas.width, i * lineSpacing);
+        ctx.stroke();
+    }
 }
 
-// --- НАСТРОЙКИ КЛАССИЧЕСКОЙ СЕЙСМОГРАММЫ ---
-const numLines = 8;             
-const pointsPerLine = 400;      
-const totalPoints = numLines * pointsPerLine;
+// Стираем небольшой кусочек впереди идущей линии (эффект луча осциллографа)
+function clearAhead(x, lineIdx) {
+    const yCenter = (lineIdx + 1) * lineSpacing;
+    ctx.fillStyle = "#1a1a22";
+    // Очищаем прямоугольник перед маркером
+    ctx.fillRect(x, yCenter - lineSpacing/2, 25, lineSpacing - 2);
+}
 
-let dataHistory = Array(totalPoints).fill(0);
-let currentIndex = 0;           
-const maxAmplitude = 50;        
+// Очистка при первом старте
+drawBackground();
 
-function drawSeismograph() {
-    ctx.fillStyle = "#111920";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+// --- НАСТРОЙКИ MQTT ---
+const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
+const topic = "esp32s3/seismic/geophone";
+const client = mqtt.connect(brokerUrl);
 
-    const paddingLeft = 70 * window.devicePixelRatio;
-    const paddingRight = 20 * window.devicePixelRatio;
-    const graphWidth = canvas.width - paddingLeft - paddingRight;
-    const graphHeight = canvas.height;
-    const rowHeight = graphHeight / (numLines + 1);
+// Фильтр сглаживания (чтобы убрать цифровой зуд)
+let smoothedValue = 0;
+const k = 0.2; 
 
-    ctx.lineWidth = 1 * window.devicePixelRatio;
-    ctx.font = `${11 * window.devicePixelRatio}px monospace`;
+client.on('connect', () => {
+    statusText.innerText = "🟢 СЕЙСМОСТАНЦИЯ ОНЛАЙН. ЗАПИСЬ НА БАРАБАН...";
+    statusText.style.color = "#4caf50";
+    client.subscribe(topic);
+    
+    // Начальная точка
+    lastY = (currentLineIdx + 1) * lineSpacing;
+});
 
-    for (let r = 0; r < numLines; r++) {
-        let yCenter = rowHeight * (r + 1);
+client.on('message', (receivedTopic, topicMessage) => {
+    const rawValue = parseInt(topicMessage.toString());
+    
+    if (!isNaN(rawValue)) {
+        // Применяем сглаживание
+        smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
+        
+        statusText.innerText = "📡 АМПЛИТУДА: " + Math.round(smoothedValue);
 
-        ctx.strokeStyle = "#1c2730";
+        // Рассчитываем базовый Y для текущей строки
+        const yCenter = (currentLineIdx + 1) * lineSpacing;
+        // Добавляем смещение от геофона (вверх-вниз)
+        const nextY = yCenter - (smoothedValue * amplitudeScale);
+
+        // Очищаем холст прямо перед нашей линией
+        clearAhead(currentX, currentLineIdx);
+
+        // Рисуем сегмент сейсмограммы
         ctx.beginPath();
-        ctx.moveTo(paddingLeft, yCenter);
-        ctx.lineTo(canvas.width - paddingRight, yCenter);
+        ctx.strokeStyle = currentLineIdx % 2 === 0 ? "#4caf50" : "#3399ff"; // Строки чередуют цвет (зеленый/синий) для удобства
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(currentX, lastY);
+        ctx.lineTo(currentX + speed, nextY);
         ctx.stroke();
 
-        if (r === 0 || r === Math.floor(numLines / 2)) {
-            ctx.fillStyle = "#415161";
-            ctx.fillText(`+${maxAmplitude}`, paddingLeft - 55 * window.devicePixelRatio, yCenter - rowHeight * 0.3);
-            ctx.fillText(`0 мм/с²`, paddingLeft - 55 * window.devicePixelRatio, yCenter + 4 * window.devicePixelRatio);
-            ctx.fillText(`-${maxAmplitude}`, paddingLeft - 55 * window.devicePixelRatio, yCenter + rowHeight * 0.3);
-        }
+        // Рисуем яркую точку-маркер текущего времени
+        ctx.fillStyle = "#ff3333";
+        ctx.fillRect(currentX + speed, nextY - 2, 3, 3);
 
-        if (r === numLines - 1) {
-            ctx.fillStyle = "#627382";
-            const totalSeconds = 30; 
-            for (let s = 0; s <= 4; s++) {
-                let x = paddingLeft + (graphWidth * (s / 4));
-                let secLabel = ((s / 4) * totalSeconds).toFixed(0) + "с";
-                ctx.fillText(secLabel, x - 10 * window.devicePixelRatio, yCenter + rowHeight * 0.5);
-                
-                ctx.strokeStyle = "#415161";
-                ctx.beginPath();
-                ctx.moveTo(x, yCenter + rowHeight * 0.1);
-                ctx.lineTo(x, yCenter + rowHeight * 0.25);
-                ctx.stroke();
+        // Обновляем координаты
+        currentX += speed;
+        lastY = nextY;
+
+        // ЕСЛИ ЛИНИЯ ДОШЛА ДО КРАЯ ЭКРАНА — ПЕРЕХОДИМ НА СЛЕДУЮЩУЮ СТРОКУ
+        if (currentX >= canvas.width) {
+            currentX = 0;
+            currentLineIdx++;
+            
+            // Если барабан заполнился, стираем всё и начинаем сверху
+            if (currentLineIdx >= totalLines) {
+                currentLineIdx = 0;
+                drawBackground();
             }
+            
+            // Переносим координату Y на начало новой строки
+            lastY = (currentLineIdx + 1) * lineSpacing;
         }
     }
+});
 
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
+client.on('error', (err) => {
+    statusText.innerText = "❌ ОШИБКА СЕТИ: " + err;
+    statusText.style.color = "#ff4444";
+});
 
-    for (let r = 0; r < numLines; r++) {
-        ctx.beginPath();
-        
-        let currentWritingRow = Math.floor(currentIndex / pointsPerLine);
-        let age = (currentWritingRow - r + numLines) % numLines;
-        
-        if (age === 0 && currentIndex % pointsPerLine === 0) age = numLines;
+client.on('offline', () => {
+    statusText.innerText = "🟠 СВЯЗЬ ПОТЕРЯНА - Переподключение...";
+    statusText.style.color = "#ffa500";
+});
+</script>
 
-        if (r === currentWritingRow) {
-            ctx.strokeStyle = "#ff5376"; 
-            ctx.lineWidth = 1.5 * window
+</body>
+</html>
