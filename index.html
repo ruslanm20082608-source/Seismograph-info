@@ -33,8 +33,8 @@
         #status {
             font-size: 0.9rem;
             font-weight: 500;
-            color: #2ecd71;
-            background: rgba(46, 205, 113, 0.1);
+            color: #ffa500;
+            background: rgba(255, 165, 0, 0.1);
             padding: 6px 12px;
             border-radius: 20px;
             transition: all 0.3s ease;
@@ -58,7 +58,7 @@
 
     <header>
         <div class="logo">SG24 life</div>
-        <div id="status">🟢 ПОДКЛЮЧЕНИЕ К СЕТИ...</div>
+        <div id="status">🟠 ПОДКЛЮЧЕНИЕ...</div>
     </header>
 
     <div class="canvas-container">
@@ -70,7 +70,6 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("status");
 
-// Настройки разрешения
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
@@ -78,16 +77,15 @@ function resizeCanvas() {
 }
 
 // --- НАСТРОЙКИ КЛАССИЧЕСКОЙ СЕЙСМОГРАММЫ ---
-const numLines = 8;             // Количество строк на барабане
-const pointsPerLine = 400;      // Количество точек в одной строке
+const numLines = 8;             
+const pointsPerLine = 400;      
 const totalPoints = numLines * pointsPerLine;
 
 let dataHistory = Array(totalPoints).fill(0);
-let currentIndex = 0;           // Индекс текущей записываемой точки
-const maxAmplitude = 50;        // Чувствительность (масштаб мм/с²)
+let currentIndex = 0;           
+const maxAmplitude = 50;        
 
 function drawSeismograph() {
-    // Очистка экрана
     ctx.fillStyle = "#111920";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -97,21 +95,18 @@ function drawSeismograph() {
     const graphHeight = canvas.height;
     const rowHeight = graphHeight / (numLines + 1);
 
-    // 1. СЕТКА И ОСИ (Амплитуда Y и Время X)
     ctx.lineWidth = 1 * window.devicePixelRatio;
     ctx.font = `${11 * window.devicePixelRatio}px monospace`;
 
     for (let r = 0; r < numLines; r++) {
         let yCenter = rowHeight * (r + 1);
 
-        // Горизонтальная нулевая ось для каждой строки
         ctx.strokeStyle = "#1c2730";
         ctx.beginPath();
         ctx.moveTo(paddingLeft, yCenter);
         ctx.lineTo(canvas.width - paddingRight, yCenter);
         ctx.stroke();
 
-        // Метки оси Y (Амплитуда в мм/с²) на первой и центральной строках
         if (r === 0 || r === Math.floor(numLines / 2)) {
             ctx.fillStyle = "#415161";
             ctx.fillText(`+${maxAmplitude}`, paddingLeft - 55 * window.devicePixelRatio, yCenter - rowHeight * 0.3);
@@ -119,16 +114,14 @@ function drawSeismograph() {
             ctx.fillText(`-${maxAmplitude}`, paddingLeft - 55 * window.devicePixelRatio, yCenter + rowHeight * 0.3);
         }
 
-        // Метки оси X (Время) на самой нижней строке
         if (r === numLines - 1) {
             ctx.fillStyle = "#627382";
-            const totalSeconds = 30; // Условный интервал развертки строки в секундах
+            const totalSeconds = 30; 
             for (let s = 0; s <= 4; s++) {
                 let x = paddingLeft + (graphWidth * (s / 4));
                 let secLabel = ((s / 4) * totalSeconds).toFixed(0) + "с";
                 ctx.fillText(secLabel, x - 10 * window.devicePixelRatio, yCenter + rowHeight * 0.5);
                 
-                // Маленькие засечки времени
                 ctx.strokeStyle = "#415161";
                 ctx.beginPath();
                 ctx.moveTo(x, yCenter + rowHeight * 0.1);
@@ -138,117 +131,17 @@ function drawSeismograph() {
         }
     }
 
-    // 2. ОТРИСОВКА НЕПРЕРЫВНОЙ СЕЙСМИЧЕСКОЙ ЛИНИИ
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
 
     for (let r = 0; r < numLines; r++) {
         ctx.beginPath();
         
-        // Чем дальше строка от текущей записи, тем она тускнее (эффект старения бумаги)
         let currentWritingRow = Math.floor(currentIndex / pointsPerLine);
         let age = (currentWritingRow - r + numLines) % numLines;
         
-        if (age === 0 && currentIndex % pointsPerLine === 0) age = numLines; // Коррекция стыка
+        if (age === 0 && currentIndex % pointsPerLine === 0) age = numLines;
 
         if (r === currentWritingRow) {
-            ctx.strokeStyle = "#ff5376"; // Текущая строка — ярко-розовая
-            ctx.lineWidth = 1.5 * window.devicePixelRatio;
-        } else {
-            // Затухание старых строк
-            let alpha = Math.max(0.1, 1 - (age * 0.12));
-            ctx.strokeStyle = `rgba(255, 83, 118, ${alpha})`;
-            ctx.lineWidth = 1 * window.devicePixelRatio;
-        }
-
-        let yCenter = rowHeight * (r + 1);
-        let firstPointInRow = true;
-
-        for (let p = 0; p < pointsPerLine; p++) {
-            let globalIdx = r * pointsPerLine + p;
-            
-            // Пропуск еще не записанных точек при самом первом запуске
-            if (globalIdx > currentIndex && dataHistory[globalIdx] === 0) continue;
-
-            // Не рисуем линию в точке, которая прямо сейчас перезаписывается
-            if (globalIdx === currentIndex) {
-                firstPointInRow = true;
-                continue;
-            }
-
-            let x = paddingLeft + (p / (pointsPerLine - 1)) * graphWidth;
-            let val = dataHistory[globalIdx];
-            
-            // Вычисление Y с ограничением, чтобы треки не перекрывали друг друга слишком сильно
-            let yOffset = (val / maxAmplitude) * (rowHeight * 0.45);
-            let y = yCenter - yOffset;
-
-            if (firstPointInRow) {
-                ctx.moveTo(x, y);
-                firstPointInRow = false;
-            } else {
-                ctx.lineTo(x, y);
-            }
-        }
-        ctx.stroke();
-    }
-
-    // 3. МАРКЕР ТЕКУЩЕЙ ЗАПИСИ (мигающая точка пера)
-    let curRow = Math.floor(currentIndex / pointsPerLine);
-    let curPoint = currentIndex % pointsPerLine;
-    let markerX = paddingLeft + (curPoint / (pointsPerLine - 1)) * graphWidth;
-    let markerY = rowHeight * (curRow + 1) - (dataHistory[currentIndex] / maxAmplitude) * (rowHeight * 0.45);
-
-    ctx.fillStyle = "#ffffff";
-    ctx.shadowBlur = 10 * window.devicePixelRatio;
-    ctx.shadowColor = "#ff5376";
-    ctx.beginPath();
-    ctx.arc(markerX, markerY, 3 * window.devicePixelRatio, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0; // Сброс тени, чтобы не тормозило
-}
-
-// --- НАСТРОЙКИ MQTT BROKER ---
-const brokerUrl = "wss://broker.hivemq.com:443/mqtt"; 
-const topic = "esp32s3/seismic/geophone";
-const client = mqtt.connect(brokerUrl);
-
-let smoothedValue = 0;
-const k = 0.4; // Коэффициент фильтрации шума
-
-client.on('connect', () => {
-    statusText.innerText = "🟢 ОНЛАЙН";
-    statusText.style.color = "#2ecd71";
-    statusText.style.background = "rgba(46, 205, 113, 0.1)";
-    client.subscribe(topic);
-});
-
-client.on('message', (receivedTopic, topicMessage) => {
-    const rawValue = parseInt(topicMessage.toString());
-    
-    if (!isNaN(rawValue)) {
-        smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
-
-        // Запись в текущий индекс циклического буфера барабана
-        dataHistory[currentIndex] = smoothedValue;
-        
-        // Сдвиг указателя записи вперед
-        currentIndex = (currentIndex + 1) % totalPoints;
-
-        // Перерисовка
-        drawSeismograph();
-    }
-});
-
-client.on('offline', () => {
-    statusText.innerText = "🟠 ОФФЛАЙН";
-    statusText.style.color = "#ffa500";
-    statusText.style.background = "rgba(255, 165, 0, 0.1)";
-});
-
-window.addEventListener('resize', resizeCanvas);
-window.onload = resizeCanvas;
-</script>
-
-</body>
-</html>
+            ctx.strokeStyle = "#ff5376"; 
+            ctx.lineWidth = 1.5 * window
