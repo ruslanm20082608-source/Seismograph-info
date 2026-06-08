@@ -73,19 +73,22 @@ const ctx = canvas.getContext("2d");
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
 const totalLines = 12;         // Количество строк на экране
 const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
-const speed = 2;               // Скорость движения пера (пикселей за шаг)
+const speed = 1.5;             // Оптимальная скорость шага для плавной прокрутки
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
-let lastY = 0;
+
+// --- БУФЕРИЗАЦИЯ ДЛЯ СТАБИЛИЗАЦИИ ПОТОКА ---
+let dataBuffer = [];           // Сюда складываем точки из MQTT
+let lastVisualValue = 0;       // Последняя отрисованная точка
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     lineSpacing = canvas.height / (totalLines + 1);
     drawBackground();
-    lastY = (currentLineIdx + 1) * lineSpacing;
+    currentX = 70 * window.devicePixelRatio;
 }
 
 // Фоновая сетка барабана
@@ -103,21 +106,21 @@ function drawBackground() {
         ctx.stroke();
     }
     
-    // Вывод разметки оси Y (Амплитуда) и оси Х (Время)
     ctx.fillStyle = "#415161";
     ctx.font = `${10 * window.devicePixelRatio}px monospace`;
     for (let i = 1; i <= totalLines; i += 4) {
         ctx.fillText(`+${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) - lineSpacing * 0.25);
-        ctx.fillText(`0 мм/с²`, 15 * window.devicePixelRatio, (i * i * 0) + (i * lineSpacing) + 3 * window.devicePixelRatio);
+        ctx.fillText(`0 мм/с²`, 15 * window.devicePixelRatio, (i * lineSpacing) + 3 * window.devicePixelRatio);
         ctx.fillText(`-${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) + lineSpacing * 0.3);
     }
 }
 
-// Эффект луча осциллографа (стирание старого перед пером)
+// Эффект луча осциллографа
 function clearAhead(x, lineIdx) {
     const yCenter = (lineIdx + 1) * lineSpacing;
     ctx.fillStyle = "#111920";
-    ctx.fillRect(x, yCenter - lineSpacing/2, 30 * window.devicePixelRatio, lineSpacing - 2);
+    // Очищаем небольшой кусочек прямо перед маркером
+    ctx.fillRect(x, yCenter - lineSpacing/2, 25 * window.devicePixelRatio, lineSpacing - 2);
 }
 
 // --- НАСТРОЙКИ MQTT БРОКЕРА ---
@@ -145,58 +148,74 @@ client.on('connect', () => {
 
 client.on('message', (receivedTopic, topicMessage) => {
     const rawValue = parseFloat(topicMessage.toString());
-    
     if (!isNaN(rawValue)) {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
+        // Вместо мгновенного рисования — просто кидаем в буфер очереди
+        dataBuffer.push(smoothedValue);
         
-        const startX = 70 * window.devicePixelRatio;
-        if (currentX < startX) currentX = startX;
-
-        const yCenter = (currentLineIdx + 1) * lineSpacing;
-        
-        // Масштабирование под размер строки на экране
-        const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
-        
-        // Вычисляем крайние точки всплеска (вверх и вниз от нулевой линии)
-        const offset = smoothedValue * dynamicScale;
-        const nextYTop = yCenter - offset;
-        const nextYBottom = yCenter + offset;
-
-        clearAhead(currentX, currentLineIdx);
-
-        // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
-        ctx.beginPath();
-        ctx.strokeStyle = "#ff5376"; 
-        ctx.lineWidth = 1.5 * window.devicePixelRatio;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        
-        // Соединяем верхний пик сигнала с нижним одной сплошной вертикальной линией
-        ctx.moveTo(currentX + speed, nextYTop);
-        ctx.lineTo(currentX + speed, nextYBottom);
-        ctx.stroke();
-
-        // Яркий маркер текущего положения пера (бежит ровно по центру)
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(currentX + speed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
-
-        currentX += speed;
-        lastY = yCenter; // Сохраняем базовый центр для совместимости логики перехода строк
-
-        // Переход на новую строку при достижении правого края
-        if (currentX >= canvas.width - 10) {
-            currentX = startX;
-            currentLineIdx++;
-            
-            if (currentLineIdx >= totalLines) {
-                currentLineIdx = 0;
-                drawBackground();
-            }
-            
-            lastY = (currentLineIdx + 1) * lineSpacing;
+        // Защита от переполнения буфера при сильных задержках сети
+        if (dataBuffer.length > 300) {
+            dataBuffer.shift();
         }
     }
 });
+
+// --- НЕПРЕРЫВНЫЙ ИГРОВОЙ ЦИКЛОТРОН ОТРИСОВКИ (60 FPS) ---
+function renderLoop() {
+    // Если в буфере есть данные, плавно вытаскиваем первую точку
+    if (dataBuffer.length > 0) {
+        lastVisualValue = dataBuffer.shift();
+    } else {
+        // Если сеть на долю секунды замерла, плавно возвращаем график к нулю, чтобы не было дыр
+        lastVisualValue = lastVisualValue * 0.9;
+    }
+
+    const startX = 70 * window.devicePixelRatio;
+    if (currentX < startX) currentX = startX;
+
+    const yCenter = (currentLineIdx + 1) * lineSpacing;
+    const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
+    
+    const offset = lastVisualValue * dynamicScale;
+    const nextYTop = yCenter - offset;
+    const nextYBottom = yCenter + offset;
+
+    const currentSpeed = speed * window.devicePixelRatio;
+
+    clearAhead(currentX, currentLineIdx);
+
+    // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА В РЕАЛЬНОМ ВРЕМЕНИ
+    ctx.beginPath();
+    ctx.strokeStyle = "#ff5376"; 
+    ctx.lineWidth = 1.5 * window.devicePixelRatio;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    
+    // Рисуем сплошной вертикальный срез волны
+    ctx.moveTo(currentX + currentSpeed, nextYTop);
+    ctx.lineTo(currentX + currentSpeed, nextYBottom);
+    ctx.stroke();
+
+    // Яркий маркер текущего положения пера (бежит строго по центру строки)
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(currentX + currentSpeed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
+
+    currentX += currentSpeed;
+
+    // Переход на новую строку при достижении правого края
+    if (currentX >= canvas.width - 10) {
+        currentX = startX;
+        currentLineIdx++;
+        
+        if (currentLineIdx >= totalLines) {
+            currentLineIdx = 0;
+            drawBackground();
+        }
+    }
+
+    // Запрашиваем следующий кадр анимации системы
+    requestAnimationFrame(renderLoop);
+}
 
 client.on('offline', () => {
     statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
@@ -205,7 +224,11 @@ client.on('offline', () => {
 });
 
 window.addEventListener('resize', resizeCanvas);
-window.onload = resizeCanvas;
+window.onload = () => {
+    resizeCanvas();
+    // Запуск бесконечного плавного цикла отрисовки
+    requestAnimationFrame(renderLoop);
+};
 </script>
 
 </body>
