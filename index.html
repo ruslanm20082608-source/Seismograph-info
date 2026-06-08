@@ -74,9 +74,9 @@ const ctx = canvas.getContext("2d");
 const totalLines = 12;         // Количество строк на экране
 const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
 
-// ЖЕЛАЕМАЯ СКОРОСТЬ: уменьши это число, чтобы график шел еще медленнее (например, 0.2), 
-// или увеличивай (например, 0.5), если нужно побыстрее.
-const speed = 0.3;             
+// НАСТРОЙКА СКОРОСТИ: поставил 0.08 для очень медленного движения.
+// Если нужно еще медленнее — ставь 0.04. Если чуть быстрее — 0.15.
+const speed = 0.08;             
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
@@ -156,7 +156,7 @@ client.on('message', (receivedTopic, topicMessage) => {
         dataBuffer.push(smoothedValue);
         
         // Защита от переполнения буфера
-        if (dataBuffer.length > 300) {
+        if (dataBuffer.length > 500) {
             dataBuffer.shift();
         }
     }
