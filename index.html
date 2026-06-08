@@ -78,18 +78,14 @@ const speed = 2;               // Скорость движения пера (п
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
-let lastYTop = 0;              // Для верхней точки прошлого шага
-let lastYBottom = 0;           // Для нижней точки прошлого шага
+let lastY = 0;
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     lineSpacing = canvas.height / (totalLines + 1);
     drawBackground();
-    
-    // Инициализируем обе точки на нулевой линии текущей строки
-    lastYTop = (currentLineIdx + 1) * lineSpacing;
-    lastYBottom = lastYTop;
+    lastY = (currentLineIdx + 1) * lineSpacing;
 }
 
 // Фоновая сетка барабана
@@ -161,7 +157,56 @@ client.on('message', (receivedTopic, topicMessage) => {
         // Масштабирование под размер строки на экране
         const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
         
-        // Считаем зеркальные координаты Y (отклонение вверх и вниз)
+        // Вычисляем крайние точки всплеска (вверх и вниз от нулевой линии)
         const offset = smoothedValue * dynamicScale;
         const nextYTop = yCenter - offset;
         const nextYBottom = yCenter + offset;
+
+        clearAhead(currentX, currentLineIdx);
+
+        // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
+        ctx.beginPath();
+        ctx.strokeStyle = "#ff5376"; 
+        ctx.lineWidth = 1.5 * window.devicePixelRatio;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        
+        // Соединяем верхний пик сигнала с нижним одной сплошной вертикальной линией
+        ctx.moveTo(currentX + speed, nextYTop);
+        ctx.lineTo(currentX + speed, nextYBottom);
+        ctx.stroke();
+
+        // Яркий маркер текущего положения пера (бежит ровно по центру)
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(currentX + speed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
+
+        currentX += speed;
+        lastY = yCenter; // Сохраняем базовый центр для совместимости логики перехода строк
+
+        // Переход на новую строку при достижении правого края
+        if (currentX >= canvas.width - 10) {
+            currentX = startX;
+            currentLineIdx++;
+            
+            if (currentLineIdx >= totalLines) {
+                currentLineIdx = 0;
+                drawBackground();
+            }
+            
+            lastY = (currentLineIdx + 1) * lineSpacing;
+        }
+    }
+});
+
+client.on('offline', () => {
+    statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
+    statusText.style.color = "#ffa500";
+    statusText.style.background = "rgba(255, 165, 0, 0.1)";
+});
+
+window.addEventListener('resize', resizeCanvas);
+window.onload = resizeCanvas;
+</script>
+
+</body>
+</html>
