@@ -71,20 +71,17 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 12;         // Количество строк на экране
+const totalLines = 12;         
 const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
-
-// НАСТРОЙКА СКОРОСТИ: поставил 0.08 для очень медленного движения.
-// Если нужно еще медленнее — ставь 0.04. Если чуть быстрее — 0.15.
-const speed = 0.08;             
+const speed = 0.08;            // Твоя идеальная медленная скорость
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
 
 // --- БУФЕРИЗАЦИЯ ДЛЯ СТАБИЛИЗАЦИИ ПОТОКА ---
-let dataBuffer = [];           // Сюда складываем точки из MQTT
-let lastVisualValue = 0;       // Последняя отрисованная точка
+let dataBuffer = [];           
+let lastVisualValue = 0;       
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
@@ -122,7 +119,6 @@ function drawBackground() {
 function clearAhead(x, lineIdx) {
     const yCenter = (lineIdx + 1) * lineSpacing;
     ctx.fillStyle = "#111920";
-    // Очищаем небольшой кусочек прямо перед маркером
     ctx.fillRect(x, yCenter - lineSpacing/2, 25 * window.devicePixelRatio, lineSpacing - 2);
 }
 
@@ -140,7 +136,7 @@ const options = {
 const client = mqtt.connect(brokerUrl, options);
 
 let smoothedValue = 0;
-const k = 0.3; // Фильтрация шумов
+const k = 0.3; 
 
 client.on('connect', () => {
     statusText.innerText = "🟢 ОНЛАЙН — Идет непрерывная запись...";
@@ -155,7 +151,6 @@ client.on('message', (receivedTopic, topicMessage) => {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
         dataBuffer.push(smoothedValue);
         
-        // Защита от переполнения буфера
         if (dataBuffer.length > 500) {
             dataBuffer.shift();
         }
@@ -184,25 +179,35 @@ function renderLoop() {
 
     clearAhead(currentX, currentLineIdx);
 
+    // --- ВЫДЕЛЕНИЕ СОБЫТИЙ (МАТЕМАТИКА) ---
+    const absValue = Math.abs(lastVisualValue); // Текущая сила сигнала
+    
+    // 1. Динамическая толщина линии: базовая 1.5px, при максимальном ударе увеличивается до 4.5px
+    const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 3.0) * window.devicePixelRatio;
+    
+    // 2. Динамический цвет: если амплитуда превышает 35% от максимума, красим в неоновый красный
+    let dynamicColor = "#ff5376"; // Базовый розовый
+    if (absValue > maxAmplitude * 0.35) {
+        dynamicColor = "#ff3333"; // Неоновый красный для ударов
+    }
+
     // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
     ctx.beginPath();
-    ctx.strokeStyle = "#ff5376"; 
-    ctx.lineWidth = 1.5 * window.devicePixelRatio;
+    ctx.strokeStyle = dynamicColor; 
+    ctx.lineWidth = dynamicLineWidth;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     
-    // Рисуем сплошной вертикальный срез волны
     ctx.moveTo(currentX + currentSpeed, nextYTop);
     ctx.lineTo(currentX + currentSpeed, nextYBottom);
     ctx.stroke();
 
-    // Яркий маркер текущего положения пера (бежит строго по центру строки)
+    // Белый маркер пера
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(currentX + currentSpeed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
 
     currentX += currentSpeed;
 
-    // Переход на новую строку при достижении правого края
     if (currentX >= canvas.width - 10) {
         currentX = startX;
         currentLineIdx++;
