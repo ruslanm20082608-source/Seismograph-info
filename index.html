@@ -78,8 +78,8 @@ const speed = 2;               // Скорость движения пера (п
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
-let lastYTop = 0;       // Добавлено: для верхней точки прошлого шага
-let lastYBottom = 0;    // Добавлено: для нижней (зеркальной) точки прошлого шага
+let lastYTop = 0;              // Для верхней точки прошлого шага
+let lastYBottom = 0;           // Для нижней точки прошлого шага
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
@@ -87,7 +87,7 @@ function resizeCanvas() {
     lineSpacing = canvas.height / (totalLines + 1);
     drawBackground();
     
-    // Инициализируем обе точки на осевой линии строки
+    // Инициализируем обе точки на нулевой линии текущей строки
     lastYTop = (currentLineIdx + 1) * lineSpacing;
     lastYBottom = lastYTop;
 }
@@ -161,69 +161,7 @@ client.on('message', (receivedTopic, topicMessage) => {
         // Масштабирование под размер строки на экране
         const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
         
-        // Считаем две симметричные координаты Y относительно центра строки
+        // Считаем зеркальные координаты Y (отклонение вверх и вниз)
         const offset = smoothedValue * dynamicScale;
         const nextYTop = yCenter - offset;
-        const nextYBottom = yCenter + offset; // Зеркальное отражение вниз
-
-        clearAhead(currentX, currentLineIdx);
-
-        // Отрисовка РОЗОВОГО трека сейсмограммы
-        ctx.beginPath();
-        ctx.strokeStyle = "#ff5376"; 
-        ctx.lineWidth = 1.5 * window.devicePixelRatio;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        
-        // Рисуем верхнюю половину волны
-        ctx.moveTo(currentX, lastYTop);
-        ctx.lineTo(currentX + speed, nextYTop);
-        
-        // Рисуем нижнюю половину волны (отзеркаленную)
-        ctx.moveTo(currentX, lastYBottom);
-        ctx.lineTo(currentX + speed, nextYBottom);
-        ctx.stroke();
-
-        // Заполнение вертикального пространства полупрозрачным цветом (для объема волны)
-        ctx.beginPath();
-        ctx.strokeStyle = "rgba(255, 83, 118, 0.2)";
-        ctx.moveTo(currentX + speed, nextYTop);
-        ctx.lineTo(currentX + speed, nextYBottom);
-        ctx.stroke();
-
-        // Яркий маркер текущего положения пера
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(currentX + speed, nextYTop - 1.5 * window.devicePixelRatio, 3 * window.devicePixelRatio, 3 * window.devicePixelRatio);
-
-        currentX += speed;
-        lastYTop = nextYTop;
-        lastYBottom = nextYBottom;
-
-        // Переход на новую строку при достижении правого края
-        if (currentX >= canvas.width - 10) {
-            currentX = startX;
-            currentLineIdx++;
-            
-            if (currentLineIdx >= totalLines) {
-                currentLineIdx = 0;
-                drawBackground();
-            }
-            
-            lastYTop = (currentLineIdx + 1) * lineSpacing;
-            lastYBottom = lastYTop;
-        }
-    }
-});
-
-client.on('offline', () => {
-    statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
-    statusText.style.color = "#ffa500";
-    statusText.style.background = "rgba(255, 165, 0, 0.1)";
-});
-
-window.addEventListener('resize', resizeCanvas);
-window.onload = resizeCanvas;
-</script>
-
-</body>
-</html>
+        const nextYBottom = yCenter + offset;
