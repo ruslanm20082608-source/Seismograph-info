@@ -1,69 +1,69 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SG24 life — Онлайн Сейсмограф</title>
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-<style>
-body {
-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-background-color: #111920;
-color: #627382;
-margin: 0;
-padding: 20px;
-display: flex;
-flex-direction: column;
-height: 92vh;
-overflow: hidden;
-}
-header {
-display: flex;
-justify-content: space-between;
-align-items: center;
-margin-bottom: 15px;
-padding: 0 10px;
-}
-.logo {
-font-size: 1.4rem;
-font-weight: 700;
-color: #ffffff;
-letter-spacing: 1px;
-}
-#status {
-font-size: 0.9rem;
-font-weight: 500;
-color: #ffa500;
-background: rgba(255, 165, 0, 0.1);
-padding: 6px 12px;
-border-radius: 20px;
-transition: all 0.3s ease;
-}
-.canvas-container {
-flex-grow: 1;
-position: relative;
-width: 100%;
-background-color: #111920;
-border: 1px solid #1c2730;
-border-radius: 8px;
-}
-canvas {
-display: block;
-width: 100%;
-height: 100%;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SG24 life — Онлайн Сейсмограф</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #111920; 
+            color: #627382;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 92vh;
+            overflow: hidden;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 0 10px;
+        }
+        .logo {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 1px;
+        }
+        #status {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #ffa500;
+            background: rgba(255, 165, 0, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+        }
+        .canvas-container {
+            flex-grow: 1;
+            position: relative;
+            width: 100%;
+            background-color: #111920;
+            border: 1px solid #1c2730;
+            border-radius: 8px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
 </head>
 <body>
 
-<header>
-<div class="logo">SG24 life</div>
-<div id="status">🟠 ПОДКЛЮЧЕНИЕ К СЕЙСМОСТАНЦИИ...</div>
-</header>
+    <header>
+        <div class="logo">SG24 life</div>
+        <div id="status">🟠 ПОДКЛЮЧЕНИЕ К СЕЙСМОСТАНЦИИ...</div>
+    </header>
 
-<div class="canvas-container">
-<canvas id="seismicCanvas"></canvas>
-</div>
+    <div class="canvas-container">
+        <canvas id="seismicCanvas"></canvas>
+    </div>
 
 <script>
 const statusText = document.getElementById("status");
@@ -71,53 +71,153 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 12;
- const maxAmplitude = 10; // Максимальная амплитуда (ось Y) в мм/с²
-const speed = 0.08; // Твоя идеальная медленная скорость
+const totalLines = 6;          // Меньше строк, чтобы влез спектр снизу
+const maxAmplitude = 10;       
+const speed = 0.08;            // Твоя медленная скорость
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
 
+// --- НАСТРОЙКИ СПЕКТРОГРАММЫ ---
+const SAMPLING_RATE = 40;      // Примерная частота опроса геофона в Гц
+const FFT_SIZE = 64;           // Размер окна БПФ (чем меньше, тем быстрее расчет)
+let rawBuffer = [];            // Буфер для точек спектра
+let specX = 70;                
+let spectrogramTop = 0;        
+let spectrogramHeight = 0;     
+let lastVisualValue = 0;
+
 // --- БУФЕРИЗАЦИЯ ДЛЯ СТАБИЛИЗАЦИИ ПОТОКА ---
-let dataBuffer = [];
- let lastVisualValue = 0;
+let dataBuffer = [];           
 
 function resizeCanvas() {
-canvas.width = canvas.clientWidth * window.devicePixelRatio;
-canvas.height = canvas.clientHeight * window.devicePixelRatio;
-lineSpacing = canvas.height / (totalLines + 1);
-drawBackground();
-currentX = 70 * window.devicePixelRatio;
+    canvas.width = canvas.clientWidth * window.devicePixelRatio;
+    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    
+    // Делим экран: 60% под барабан, остальное под спектрограмму
+    const drumHeight = canvas.height * 0.55;
+    spectrogramTop = canvas.height * 0.65;
+    spectrogramHeight = canvas.height - spectrogramTop - 25 * window.devicePixelRatio;
+
+    lineSpacing = drumHeight / (totalLines + 1);
+    drawBackground();
+    currentX = 70 * window.devicePixelRatio;
+    specX = 70 * window.devicePixelRatio;
 }
 
-// Фоновая сетка барабана
 function drawBackground() {
-ctx.fillStyle = "#111920";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#111920";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.strokeStyle = "#1c2730";
+    ctx.lineWidth = 1 * window.devicePixelRatio;
+    
+    // Сетка барабана
+    for (let i = 1; i <= totalLines; i++) {
+        ctx.beginPath();
+        ctx.moveTo(70 * window.devicePixelRatio, i * lineSpacing);
+        ctx.lineTo(canvas.width, i * lineSpacing);
+        ctx.stroke();
+    }
+    
+    // Текст осей барабана
+    ctx.fillStyle = "#415161";
+    ctx.font = `${10 * window.devicePixelRatio}px monospace`;
+    for (let i = 1; i <= totalLines; i += 2) {
+        ctx.fillText(`+${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) - lineSpacing * 0.25);
+        ctx.fillText(`0`, 15 * window.devicePixelRatio, (i * lineSpacing) + 3 * window.devicePixelRatio);
+        ctx.fillText(`-${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) + lineSpacing * 0.3);
+    }
 
-ctx.strokeStyle = "#1c2730";
-ctx.lineWidth = 1 * window.devicePixelRatio;
+    // Сетка спектрограммы
+    ctx.strokeStyle = "#1c2730";
+    ctx.strokeRect(70 * window.devicePixelRatio, spectrogramTop, canvas.width, spectrogramHeight);
 
-for (let i = 1; i <= totalLines; i++) {
-ctx.beginPath();
-ctx.moveTo(70 * window.devicePixelRatio, i * lineSpacing);
-ctx.lineTo(canvas.width, i * lineSpacing);
-ctx.stroke();
+    const maxFreq = SAMPLING_RATE / 2;
+    const steps = 3;
+    for (let i = 0; i <= steps; i++) {
+        const freq = (maxFreq * (i / steps)).toFixed(1);
+        const y = spectrogramTop + spectrogramHeight - (i * (spectrogramHeight / steps));
+        
+        ctx.fillStyle = "#415161";
+        ctx.fillText(`${freq} Гц`, 15 * window.devicePixelRatio, y + 4 * window.devicePixelRatio);
+        
+        ctx.beginPath();
+        ctx.moveTo(70 * window.devicePixelRatio, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    }
 }
 
-ctx.fillStyle = "#415161";
-ctx.font = ${10 * window.devicePixelRatio}px monospace; for (let i = 1; i &lt;= totalLines; i += 4) { ctx.fillText(+${maxAmplitude}, 15 * window.devicePixelRatio, (i * lineSpacing) - lineSpacing * 0.25);
-ctx.fillText(0 мм/с², 15 * window.devicePixelRatio, (i * lineSpacing) + 3 * window.devicePixelRatio);
-ctx.fillText(-${maxAmplitude}, 15 * window.devicePixelRatio, (i * lineSpacing) + lineSpacing * 0.3);
-}
-}
-
-// Эффект луча осциллографа
 function clearAhead(x, lineIdx) {
-const yCenter = (lineIdx + 1) * lineSpacing;
-ctx.fillStyle = "#111920";
-ctx.fillRect(x, yCenter - lineSpacing/2, 25 * window.devicePixelRatio, lineSpacing - 2);
+    const yCenter = (lineIdx + 1) * lineSpacing;
+    ctx.fillStyle = "#111920";
+    ctx.fillRect(x, yCenter - lineSpacing/2, 25 * window.devicePixelRatio, lineSpacing - 2);
+}
+
+// --- ИСПРАВЛЕННАЯ МАТЕМАТИКА БПФ (FFT) ---
+function computeFFT(amplitudes) {
+    const N = amplitudes.length;
+    if (N <= 1) return amplitudes;
+
+    const real = new Float32Array(N);
+    const imag = new Float32Array(N);
+    
+    for (let i = 0; i < N; i++) {
+        const windowValue = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (N - 1)));
+        real[i] = amplitudes[i] * windowValue;
+    }
+
+    function fftRecursive(r, j) {
+        const n = r.length;
+        if (n <= 1) return;
+
+        const rEven = new Float32Array(n / 2);
+        const jEven = new Float32Array(n / 2);
+        const rOdd = new Float32Array(n / 2);
+        const jOdd = new Float32Array(n / 2);
+
+        for (let i = 0; i < n / 2; i++) {
+            rEven[i] = r[2 * i];
+            jEven[i] = j[2 * i];
+            rOdd[i] = r[2 * i + 1];
+            jOdd[i] = j[2 * i + 1];
+        }
+
+        fftRecursive(rEven, jEven);
+        fftRecursive(rOdd, jOdd);
+
+        for (let k = 0; k < n / 2; k++) {
+            const th = -2 * Math.PI * k / n;
+            const wReal = Math.cos(th);
+            const wImag = Math.sin(th);
+
+            const tReal = rOdd[k] * wReal - jOdd[k] * wImag;
+            const tImag = rOdd[k] * wImag + jOdd[k] * wReal;
+
+            r[k] = rEven[k] + tReal;
+            j[k] = jEven[k] + tImag;
+            r[k + n / 2] = rEven[k] - tReal; // ТУТ БЫЛА ОШИБКА, СЕЙЧАС ВСЕ ИСПРАВЛЕНО!
+            j[k + n / 2] = jEven[k] - tImag;
+        }
+    }
+
+    fftRecursive(real, imag);
+
+    const magnitudes = new Float32Array(N / 2);
+    for (let i = 0; i < N / 2; i++) {
+        magnitudes[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
+    }
+    return magnitudes;
+}
+
+function getColorForIntensity(value) {
+    const v = Math.max(0, Math.min(1, value));
+    const r = Math.floor(Math.max(0, (v - 0.1) * 3.5) * 255);
+    const g = Math.floor(Math.max(0, (v - 0.35) * 3.5) * 255);
+    const b = Math.floor(Math.min(1, v * 2.0) * 120 + Math.max(0, (v - 0.6) * 4) * 135);
+    return `rgb(${r}, ${g}, ${b})`;
 }
 
 // --- НАСТРОЙКИ MQTT БРОКЕРА ---
@@ -125,110 +225,135 @@ const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
 const topic = "esp32s3/seismic/geophone";
 
 const options = {
-connectTimeout: 5000,
-clientId: 'SG24_Life_Drum_' + Math.random().toString(16).substr(2, 8),
-keepalive: 60,
-clean: true
+    connectTimeout: 5000,
+    clientId: 'SG24_Life_Drum_' + Math.random().toString(16).substr(2, 8),
+    keepalive: 60,
+    clean: true
 };
 
 const client = mqtt.connect(brokerUrl, options);
-
 let smoothedValue = 0;
-const k = 0.3;
+const k = 0.3; 
 
 client.on('connect', () => {
-statusText.innerText = "🟢 ОНЛАЙН — Идет непрерывная запись...";
-statusText.style.color = "#2ecd71";
-statusText.style.background = "rgba(46, 205, 113, 0.1)";
-client.subscribe(topic);
+    statusText.innerText = "🟢 ОНЛАЙН — Идет непрерывная запись...";
+    statusText.style.color = "#2ecd71";
+    statusText.style.background = "rgba(46, 205, 113, 0.1)";
+    client.subscribe(topic);
 });
 
 client.on('message', (receivedTopic, topicMessage) => {
-const rawValue = parseFloat(topicMessage.toString());
-if (!isNaN(rawValue)) {
-smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
-dataBuffer.push(smoothedValue);
+    const rawValue = parseFloat(topicMessage.toString());
+    if (!isNaN(rawValue)) {
+        smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
+        dataBuffer.push(smoothedValue);
+        
+        // Буфер для расчета частот спектра
+        rawBuffer.push(smoothedValue);
+        if (rawBuffer.length > FFT_SIZE) {
+            rawBuffer.shift();
+        }
 
-if (dataBuffer.length > 500) {
-dataBuffer.shift();
-}
-}
+        if (dataBuffer.length > 500) {
+            dataBuffer.shift();
+        }
+    }
 });
 
-// --- НЕПРЕРЫВНЫЙ ЦИКЛ ОТРИСОВКИ (60 FPS) ---
+// --- ПЛАВНЫЙ ЦИКЛ КИНЕМАТИКИ И ОТРИСОВКИ ---
 function renderLoop() {
-if (dataBuffer.length > 0) {
-lastVisualValue = dataBuffer.shift();
-} else {
-lastVisualValue = lastVisualValue * 0.9;
-}
+    if (dataBuffer.length > 0) {
+        lastVisualValue = dataBuffer.shift();
+    } else {
+        lastVisualValue = lastVisualValue * 0.9;
+    }
 
-const startX = 70 * window.devicePixelRatio;
-if (currentX < startX) currentX = startX;
+    const startX = 70 * window.devicePixelRatio;
+    if (currentX < startX) currentX = startX;
 
-const yCenter = (currentLineIdx + 1) * lineSpacing;
-const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
+    const yCenter = (currentLineIdx + 1) * lineSpacing;
+    const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
+    
+    // Встроенный АЦП слабый, поэтому здесь тоже оставим легкое программное усиление (*6)
+    const boostedValue = lastVisualValue * 6;
 
-const offset = lastVisualValue * dynamicScale;
-const nextYTop = yCenter - offset;
-const nextYBottom = yCenter + offset;
+    const offset = boostedValue * dynamicScale;
+    const nextYTop = yCenter - offset;
+    const nextYBottom = yCenter + offset;
 
-const currentSpeed = speed * window.devicePixelRatio;
+    const currentSpeed = speed * window.devicePixelRatio;
 
-clearAhead(currentX, currentLineIdx);
+    clearAhead(currentX, currentLineIdx);
 
-// --- ВЫДЕЛЕНИЕ СОБЫТИЙ (МАТЕМАТИКА) ---
-const absValue = Math.abs(lastVisualValue); // Текущая сила сигнала
+    // Подсветка всплесков
+    const absValue = Math.abs(boostedValue);
+    const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 3.0) * window.devicePixelRatio;
+    let dynamicColor = "#ff5376"; 
+    if (absValue > maxAmplitude * 0.2) {
+        dynamicColor = "#ff3333"; 
+    }
 
-// 1. Динамическая толщина линии: базовая 1.5px, при максимальном ударе увеличивается до 4.5px
-const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 3.0) * window.devicePixelRatio;
+    // 1. Рисуем "ёлочку" сейсмограммы сверху
+    ctx.beginPath();
+    ctx.strokeStyle = dynamicColor; 
+    ctx.lineWidth = dynamicLineWidth;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.moveTo(currentX + currentSpeed, nextYTop);
+    ctx.lineTo(currentX + currentSpeed, nextYBottom);
+    ctx.stroke();
 
-// 2. Динамический цвет: если амплитуда превышает 35% от максимума, красим в неоновый красный
-let dynamicColor = "#ff5376"; // Базовый розовый
-if (absValue > maxAmplitude * 0.35) {
-dynamicColor = "#ff3333"; // Неоновый красный для ударов
-}
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(currentX + currentSpeed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
 
-// ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
-ctx.beginPath();
-ctx.strokeStyle = dynamicColor;
-ctx.lineWidth = dynamicLineWidth;
-ctx.lineJoin = "round";
-ctx.lineCap = "round";
+    currentX += currentSpeed;
 
-ctx.moveTo(currentX + currentSpeed, nextYTop);
-ctx.lineTo(currentX + currentSpeed, nextYBottom);
-ctx.stroke();
+    if (currentX >= canvas.width - 10) {
+        currentX = startX;
+        currentLineIdx++;
+        if (currentLineIdx >= totalLines) {
+            currentLineIdx = 0;
+            drawBackground();
+        }
+    }
 
-// Белый маркер пера
-ctx.fillStyle = "#ffffff";
-ctx.fillRect(currentX + currentSpeed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
+    // 2. Рисуем "водопад" спектрограммы снизу
+    if (rawBuffer.length === FFT_SIZE) {
+        const spectrum = computeFFT(rawBuffer);
+        const numBins = spectrum.length;
+        const binHeight = spectrogramHeight / numBins;
+        
+        ctx.fillStyle = "#111920";
+        ctx.fillRect(specX, spectrogramTop + 1, currentSpeed + 1, spectrogramHeight - 2);
 
-currentX += currentSpeed;
+        for (let i = 0; i < numBins; i++) {
+            // Чувствительность спектра к встроенному АЦП подкручена (/3)
+            const intensity = spectrum[i] / 3; 
+            ctx.fillStyle = getColorForIntensity(intensity);
+            
+            const y = spectrogramTop + spectrogramHeight - (i * binHeight);
+            ctx.fillRect(specX, y - binHeight, currentSpeed + 0.5, binHeight + 0.5);
+        }
 
-if (currentX >= canvas.width - 10) {
-currentX = startX;
-currentLineIdx++;
+        specX += currentSpeed;
+        if (specX >= canvas.width - 10) {
+            specX = startX;
+        }
+    }
 
-if (currentLineIdx >= totalLines) {
-currentLineIdx = 0;
-drawBackground();
-}
-}
-
-requestAnimationFrame(renderLoop);
+    requestAnimationFrame(renderLoop);
 }
 
 client.on('offline', () => {
-statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
-statusText.style.color = "#ffa500";
-statusText.style.background = "rgba(255, 165, 0, 0.1)";
+    statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
+    statusText.style.color = "#ffa500";
+    statusText.style.background = "rgba(255, 165, 0, 0.1)";
 });
 
 window.addEventListener('resize', resizeCanvas);
 window.onload = () => {
-resizeCanvas();
-requestAnimationFrame(renderLoop);
+    resizeCanvas();
+    requestAnimationFrame(renderLoop);
 };
 </script>
 
