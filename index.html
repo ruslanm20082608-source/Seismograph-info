@@ -73,7 +73,10 @@ const ctx = canvas.getContext("2d");
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
 const totalLines = 12;         // Количество строк на экране
 const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
-const speed = 1.5;             // Оптимальная скорость шага для плавной прокрутки
+
+// ЖЕЛАЕМАЯ СКОРОСТЬ: уменьши это число, чтобы график шел еще медленнее (например, 0.2), 
+// или увеличивай (например, 0.5), если нужно побыстрее.
+const speed = 0.3;             
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
@@ -150,23 +153,20 @@ client.on('message', (receivedTopic, topicMessage) => {
     const rawValue = parseFloat(topicMessage.toString());
     if (!isNaN(rawValue)) {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
-        // Вместо мгновенного рисования — просто кидаем в буфер очереди
         dataBuffer.push(smoothedValue);
         
-        // Защита от переполнения буфера при сильных задержках сети
+        // Защита от переполнения буфера
         if (dataBuffer.length > 300) {
             dataBuffer.shift();
         }
     }
 });
 
-// --- НЕПРЕРЫВНЫЙ ИГРОВОЙ ЦИКЛОТРОН ОТРИСОВКИ (60 FPS) ---
+// --- НЕПРЕРЫВНЫЙ ЦИКЛ ОТРИСОВКИ (60 FPS) ---
 function renderLoop() {
-    // Если в буфере есть данные, плавно вытаскиваем первую точку
     if (dataBuffer.length > 0) {
         lastVisualValue = dataBuffer.shift();
     } else {
-        // Если сеть на долю секунды замерла, плавно возвращаем график к нулю, чтобы не было дыр
         lastVisualValue = lastVisualValue * 0.9;
     }
 
@@ -184,7 +184,7 @@ function renderLoop() {
 
     clearAhead(currentX, currentLineIdx);
 
-    // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА В РЕАЛЬНОМ ВРЕМЕНИ
+    // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
     ctx.beginPath();
     ctx.strokeStyle = "#ff5376"; 
     ctx.lineWidth = 1.5 * window.devicePixelRatio;
@@ -213,7 +213,6 @@ function renderLoop() {
         }
     }
 
-    // Запрашиваем следующий кадр анимации системы
     requestAnimationFrame(renderLoop);
 }
 
@@ -226,7 +225,6 @@ client.on('offline', () => {
 window.addEventListener('resize', resizeCanvas);
 window.onload = () => {
     resizeCanvas();
-    // Запуск бесконечного плавного цикла отрисовки
     requestAnimationFrame(renderLoop);
 };
 </script>
