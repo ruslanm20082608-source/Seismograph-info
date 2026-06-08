@@ -71,44 +71,28 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 5;          // Уменьшили количество строк, чтобы снизу осталось место
-const maxAmplitude = 10;       
-const speed = 2;               
+const totalLines = 12;         // Количество строк на экране
+const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
+const speed = 2;               // Скорость движения пера (пикселей за шаг)
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
-let lastYTop = 0;
-let lastYBottom = 0;
-
-// --- НАСТРОЙКИ СПЕКТРОГРАММЫ ---
-const SAMPLING_RATE = 50;      // Наша частота дискретизации (Гц)
-const FFT_SIZE = 128;          // Окно БПФ
-let rawBuffer = [];            // Буфер для точек
-let specX = 70;                // Точка старта спектрограммы по X
-let spectrogramTop = 0;        // Верхняя граница зоны спектрограммы
-let spectrogramHeight = 0;     // Высота зоны спектрограммы
+let lastYTop = 0;       // Добавлено: для верхней точки прошлого шага
+let lastYBottom = 0;    // Добавлено: для нижней (зеркальной) точки прошлого шага
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
-    
-    // Разделяем один холст на 2 зоны: 65% высоты под барабан, 35% под спектрограмму
-    const drumHeight = canvas.height * 0.60;
-    spectrogramTop = canvas.height * 0.68;
-    spectrogramHeight = canvas.height - spectrogramTop - 25 * window.devicePixelRatio;
-
-    lineSpacing = drumHeight / (totalLines + 1);
-    
+    lineSpacing = canvas.height / (totalLines + 1);
     drawBackground();
     
-    const startX = 70 * window.devicePixelRatio;
+    // Инициализируем обе точки на осевой линии строки
     lastYTop = (currentLineIdx + 1) * lineSpacing;
     lastYBottom = lastYTop;
-    specX = startX;
 }
 
-// Фоновая сетка барабана и спектрограммы
+// Фоновая сетка барабана
 function drawBackground() {
     ctx.fillStyle = "#111920";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -116,7 +100,6 @@ function drawBackground() {
     ctx.strokeStyle = "#1c2730";
     ctx.lineWidth = 1 * window.devicePixelRatio;
     
-    // 1. Сетка для осциллограммы
     for (let i = 1; i <= totalLines; i++) {
         ctx.beginPath();
         ctx.moveTo(70 * window.devicePixelRatio, i * lineSpacing);
@@ -124,105 +107,21 @@ function drawBackground() {
         ctx.stroke();
     }
     
-    // Разметка оси Y осциллограммы
+    // Вывод разметки оси Y (Амплитуда) и оси Х (Время)
     ctx.fillStyle = "#415161";
     ctx.font = `${10 * window.devicePixelRatio}px monospace`;
-    for (let i = 1; i <= totalLines; i += 2) {
+    for (let i = 1; i <= totalLines; i += 4) {
         ctx.fillText(`+${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) - lineSpacing * 0.25);
-        ctx.fillText(`0`, 15 * window.devicePixelRatio, (i * lineSpacing) + 3 * window.devicePixelRatio);
+        ctx.fillText(`0 мм/с²`, 15 * window.devicePixelRatio, (i * i * 0) + (i * lineSpacing) + 3 * window.devicePixelRatio);
         ctx.fillText(`-${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) + lineSpacing * 0.3);
-    }
-
-    // 2. Сетка и разметка для спектрограммы
-    ctx.strokeStyle = "#1c2730";
-    ctx.lineWidth = 1 * window.devicePixelRatio;
-    ctx.strokeRect(70 * window.devicePixelRatio, spectrogramTop, canvas.width, spectrogramHeight);
-
-    const maxFreq = SAMPLING_RATE / 2;
-    const steps = 3;
-    for (let i = 0; i <= steps; i++) {
-        const freq = (maxFreq * (i / steps)).toFixed(1);
-        const y = spectrogramTop + spectrogramHeight - (i * (spectrogramHeight / steps));
-        
-        ctx.fillStyle = "#415161";
-        ctx.fillText(`${freq} Гц`, 15 * window.devicePixelRatio, y + 4 * window.devicePixelRatio);
-        
-        ctx.beginPath();
-        ctx.moveTo(70 * window.devicePixelRatio, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
     }
 }
 
-// Очистка перед пером сейсмограммы
+// Эффект луча осциллографа (стирание старого перед пером)
 function clearAhead(x, lineIdx) {
     const yCenter = (lineIdx + 1) * lineSpacing;
     ctx.fillStyle = "#111920";
     ctx.fillRect(x, yCenter - lineSpacing/2, 30 * window.devicePixelRatio, lineSpacing - 2);
-}
-
-// --- РЕАЛИЗАЦИЯ МАТЕМАТИКИ БПФ (FFT) ---
-function computeFFT(amplitudes) {
-    const N = amplitudes.length;
-    if (N <= 1) return amplitudes;
-
-    const real = new Float32Array(N);
-    const imag = new Float32Array(N);
-    
-    for (let i = 0; i < N; i++) {
-        const windowValue = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (N - 1)));
-        real[i] = amplitudes[i] * windowValue;
-    }
-
-    function fftRecursive(r, j) {
-        const n = r.length;
-        if (n <= 1) return;
-
-        const rEven = new Float32Array(n / 2);
-        const jEven = new Float32Array(n / 2);
-        const rOdd = new Float32Array(n / 2);
-        const jOdd = new Float32Array(n / 2);
-
-        for (let i = 0; i < n / 2; i++) {
-            rEven[i] = r[2 * i];
-            jEven[i] = j[2 * i];
-            rOdd[i] = r[2 * i + 1];
-            jOdd[i] = j[2 * i + 1];
-        }
-
-        fftRecursive(rEven, jEven);
-        fftRecursive(rOdd, jOdd);
-
-        for (let k = 0; k < n / 2; k++) {
-            const th = -2 * Math.PI * k / n;
-            const wReal = Math.cos(th);
-            const wImag = Math.sin(th);
-
-            const tReal = rOdd[k] * wReal - jOdd[k] * wImag;
-            const tImag = rOdd[k] * wImag + jOdd[k] * wReal;
-
-            r[k] = rEven[k] + tReal;
-            j[k] = jEven[k] + tImag;
-            r[k] + n / 2] = rEven[k] - tReal;
-            j[k] + n / 2] = jEven[k] - tImag;
-        }
-    }
-
-    fftRecursive(real, imag);
-
-    const magnitudes = new Float32Array(N / 2);
-    for (let i = 0; i < N / 2; i++) {
-        magnitudes[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
-    }
-    return magnitudes;
-}
-
-function getColorForIntensity(value) {
-    const v = Math.max(0, Math.min(1, value));
-    const r = Math.floor(Math.max(0, (v - 0.15) * 4.5) * 255);
-    const g = Math.floor(Math.max(0, (v - 0.45) * 3.5) * 255);
-    const b = Math.floor(Math.min(1, v * 2.5) * 110 + Math.max(0, (v - 0.65) * 4) * 145);
-    return `rgb(${r}, ${g}, ${b})`;
 }
 
 // --- НАСТРОЙКИ MQTT БРОКЕРА ---
@@ -239,7 +138,7 @@ const options = {
 const client = mqtt.connect(brokerUrl, options);
 
 let smoothedValue = 0;
-const k = 0.3; 
+const k = 0.3; // Фильтрация шумов
 
 client.on('connect', () => {
     statusText.innerText = "🟢 ОНЛАЙН — Идет непрерывная запись...";
@@ -254,93 +153,64 @@ client.on('message', (receivedTopic, topicMessage) => {
     if (!isNaN(rawValue)) {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
         
-        // Буферизация под спектр
-        rawBuffer.push(smoothedValue);
-        if (rawBuffer.length > FFT_SIZE) {
-            rawBuffer.shift();
-        }
-
         const startX = 70 * window.devicePixelRatio;
         if (currentX < startX) currentX = startX;
 
         const yCenter = (currentLineIdx + 1) * lineSpacing;
+        
+        // Масштабирование под размер строки на экране
         const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
         
-        // Расчет зеркального отклонения
+        // Считаем две симметричные координаты Y относительно центра строки
         const offset = smoothedValue * dynamicScale;
         const nextYTop = yCenter - offset;
-        const nextYBottom = yCenter + offset;
+        const nextYBottom = yCenter + offset; // Зеркальное отражение вниз
 
         clearAhead(currentX, currentLineIdx);
 
-        // ОТРИСОВКА ЗЕРКАЛЬНОЙ СЕЙСМОГРАММЫ
+        // Отрисовка РОЗОВОГО трека сейсмограммы
         ctx.beginPath();
         ctx.strokeStyle = "#ff5376"; 
         ctx.lineWidth = 1.5 * window.devicePixelRatio;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
         
-        // Верхнее перо
+        // Рисуем верхнюю половину волны
         ctx.moveTo(currentX, lastYTop);
         ctx.lineTo(currentX + speed, nextYTop);
-        // Нижнее перо (зеркало)
+        
+        // Рисуем нижнюю половину волны (отзеркаленную)
         ctx.moveTo(currentX, lastYBottom);
         ctx.lineTo(currentX + speed, nextYBottom);
         ctx.stroke();
 
-        // Заполнение межстрочного пространства (эффект объема)
+        // Заполнение вертикального пространства полупрозрачным цветом (для объема волны)
         ctx.beginPath();
-        ctx.strokeStyle = "rgba(255, 83, 118, 0.15)";
+        ctx.strokeStyle = "rgba(255, 83, 118, 0.2)";
         ctx.moveTo(currentX + speed, nextYTop);
         ctx.lineTo(currentX + speed, nextYBottom);
         ctx.stroke();
 
-        // Белый маркер текущего положения
+        // Яркий маркер текущего положения пера
         ctx.fillStyle = "#ffffff";
-        ctx.fillRect(currentX + speed, nextYTop - 1, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
+        ctx.fillRect(currentX + speed, nextYTop - 1.5 * window.devicePixelRatio, 3 * window.devicePixelRatio, 3 * window.devicePixelRatio);
 
         currentX += speed;
         lastYTop = nextYTop;
         lastYBottom = nextYBottom;
 
+        // Переход на новую строку при достижении правого края
         if (currentX >= canvas.width - 10) {
             currentX = startX;
             currentLineIdx++;
             
             if (currentLineIdx >= totalLines) {
                 currentLineIdx = 0;
-                // Вместо полной очистки фона — просто обновляем сетку
                 drawBackground();
             }
             
             lastYTop = (currentLineIdx + 1) * lineSpacing;
             lastYBottom = lastYTop;
-        }
-
-        // --- РАСЧЕТ И ОТРИСОВКА СПЕКТРОГРАММЫ ---
-        if (rawBuffer.length === FFT_SIZE) {
-            const spectrum = computeFFT(rawBuffer);
-            const numBins = spectrum.length;
-            const binHeight = spectrogramHeight / numBins;
-            
-            // Стираем полосу перед пером спектрограммы
-            ctx.fillStyle = "#111920";
-            ctx.fillRect(specX, spectrogramTop + 1, speed + 1, spectrogramHeight - 2);
-
-            // Отрисовка частотных бинов
-            for (let i = 0; i < numBins; i++) {
-                const intensity = spectrum[i] / 25; // Светочувствительность (можно менять 25 на другое)
-                ctx.fillStyle = getColorForIntensity(intensity);
-                
-                const y = spectrogramTop + spectrogramHeight - (i * binHeight);
-                ctx.fillRect(specX, y - binHeight, speed, binHeight + 0.5);
-            }
-
-            specX += speed;
-            
-            if (specX >= canvas.width - 10) {
-                specX = startX;
-            }
         }
     }
 });
