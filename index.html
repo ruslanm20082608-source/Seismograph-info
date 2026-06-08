@@ -71,40 +71,27 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 6;          // Количество строк для барабана
-const maxAmplitude = 10;       
-const speed = 0.08;            // Твоя медленная скорость
+const totalLines = 12;         
+const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
+const speed = 0.08;            // Твоя идеальная медленная скорость
 
 let lineSpacing = 0;
 let currentLineIdx = 0;
 let currentX = 0;
 
-// --- НАСТРОЙКИ СПЕКТРОГРАММЫ ---
-const SAMPLING_RATE = 40;      
-const FFT_SIZE = 64;           
-let rawBuffer = [];            
-let specX = 70;                
-let spectrogramTop = 0;        
-let spectrogramHeight = 0;     
-let lastVisualValue = 0;
-
 // --- БУФЕРИЗАЦИЯ ДЛЯ СТАБИЛИЗАЦИИ ПОТОКА ---
 let dataBuffer = [];           
+let lastVisualValue = 0;       
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
-    
-    const drumHeight = canvas.height * 0.55;
-    spectrogramTop = canvas.height * 0.65;
-    spectrogramHeight = canvas.height - spectrogramTop - 25 * window.devicePixelRatio;
-
-    lineSpacing = drumHeight / (totalLines + 1);
+    lineSpacing = canvas.height / (totalLines + 1);
     drawBackground();
     currentX = 70 * window.devicePixelRatio;
-    specX = 70 * window.devicePixelRatio;
 }
 
+// Фоновая сетка барабана
 function drawBackground() {
     ctx.fillStyle = "#111920";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -112,7 +99,6 @@ function drawBackground() {
     ctx.strokeStyle = "#1c2730";
     ctx.lineWidth = 1 * window.devicePixelRatio;
     
-    // Сетка барабана
     for (let i = 1; i <= totalLines; i++) {
         ctx.beginPath();
         ctx.moveTo(70 * window.devicePixelRatio, i * lineSpacing);
@@ -120,103 +106,20 @@ function drawBackground() {
         ctx.stroke();
     }
     
-    // Текст осей барабана
     ctx.fillStyle = "#415161";
     ctx.font = `${10 * window.devicePixelRatio}px monospace`;
-    for (let i = 1; i <= totalLines; i += 2) {
+    for (let i = 1; i <= totalLines; i += 4) {
         ctx.fillText(`+${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) - lineSpacing * 0.25);
-        ctx.fillText(`0`, 15 * window.devicePixelRatio, (i * lineSpacing) + 3 * window.devicePixelRatio);
+        ctx.fillText(`0 мм/с²`, 15 * window.devicePixelRatio, (i * lineSpacing) + 3 * window.devicePixelRatio);
         ctx.fillText(`-${maxAmplitude}`, 15 * window.devicePixelRatio, (i * lineSpacing) + lineSpacing * 0.3);
-    }
-
-    // Сетка спектрограммы
-    ctx.strokeStyle = "#1c2730";
-    ctx.strokeRect(70 * window.devicePixelRatio, spectrogramTop, canvas.width, spectrogramHeight);
-
-    const maxFreq = SAMPLING_RATE / 2;
-    const steps = 3;
-    for (let i = 0; i <= steps; i++) {
-        const freq = (maxFreq * (i / steps)).toFixed(1);
-        const y = spectrogramTop + spectrogramHeight - (i * (spectrogramHeight / steps));
-        
-        ctx.fillStyle = "#415161";
-        ctx.fillText(`${freq} Гц`, 15 * window.devicePixelRatio, y + 4 * window.devicePixelRatio);
-        
-        ctx.beginPath();
-        ctx.moveTo(70 * window.devicePixelRatio, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
     }
 }
 
+// Эффект луча осциллографа
 function clearAhead(x, lineIdx) {
     const yCenter = (lineIdx + 1) * lineSpacing;
     ctx.fillStyle = "#111920";
     ctx.fillRect(x, yCenter - lineSpacing/2, 25 * window.devicePixelRatio, lineSpacing - 2);
-}
-
-// --- МАТЕМАТИКА БПФ (FFT) ---
-function computeFFT(amplitudes) {
-    const N = amplitudes.length;
-    if (N <= 1) return amplitudes;
-
-    const real = new Float32Array(N);
-    const imag = new Float32Array(N);
-    
-    for (let i = 0; i < N; i++) {
-        const windowValue = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (N - 1)));
-        real[i] = amplitudes[i] * windowValue;
-    }
-
-    function fftRecursive(r, j) {
-        const n = r.length;
-        if (n <= 1) return;
-
-        const rEven = new Float32Array(n / 2);
-        const jEven = new Float32Array(n / 2);
-        const rOdd = new Float32Array(n / 2);
-        const jOdd = new Float32Array(n / 2);
-
-        for (let i = 0; i < n / 2; i++) {
-            rEven[i] = r[2 * i];
-            jEven[i] = j[2 * i];
-            rOdd[i] = r[2 * i + 1];
-            jOdd[i] = j[2 * i + 1];
-        }
-
-        fftRecursive(rEven, jEven);
-        fftRecursive(rOdd, jOdd);
-
-        for (let k = 0; k < n / 2; k++) {
-            const th = -2 * Math.PI * k / n;
-            const wReal = Math.cos(th);
-            const wImag = Math.sin(th);
-
-            const tReal = rOdd[k] * wReal - jOdd[k] * wImag;
-            const tImag = rOdd[k] * wImag + jOdd[k] * wReal;
-
-            r[k] = rEven[k] + tReal;
-            j[k] = jEven[k] + tImag;
-            r[k + n / 2] = rEven[k] - tReal; 
-            j[k + n / 2] = jEven[k] - tImag;
-        }
-    }
-
-    fftRecursive(real, imag);
-
-    const magnitudes = new Float32Array(N / 2);
-    for (let i = 0; i < N / 2; i++) {
-        magnitudes[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
-    }
-    return magnitudes;
-}
-
-function getColorForIntensity(value) {
-    const v = Math.max(0, Math.min(1, value));
-    const r = Math.floor(Math.max(0, (v - 0.1) * 3.5) * 255);
-    const g = Math.floor(Math.max(0, (v - 0.35) * 3.5) * 255);
-    const b = Math.floor(Math.min(1, v * 2.0) * 120 + Math.max(0, (v - 0.6) * 4) * 135);
-    return `rgb(${r}, ${g}, ${b})`;
 }
 
 // --- НАСТРОЙКИ MQTT БРОКЕРА ---
@@ -231,6 +134,7 @@ const options = {
 };
 
 const client = mqtt.connect(brokerUrl, options);
+
 let smoothedValue = 0;
 const k = 0.3; 
 
@@ -247,18 +151,13 @@ client.on('message', (receivedTopic, topicMessage) => {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
         dataBuffer.push(smoothedValue);
         
-        rawBuffer.push(smoothedValue);
-        if (rawBuffer.length > FFT_SIZE) {
-            rawBuffer.shift();
-        }
-
         if (dataBuffer.length > 500) {
             dataBuffer.shift();
         }
     }
 });
 
-// --- ПЛАВНЫЙ ЦИКЛ КИНЕМАТИКИ И ОТРИСОВКИ ---
+// --- НЕПРЕРЫВНЫЙ ЦИКЛ ОТРИСОВКИ (60 FPS) ---
 function renderLoop() {
     if (dataBuffer.length > 0) {
         lastVisualValue = dataBuffer.shift();
@@ -272,10 +171,7 @@ function renderLoop() {
     const yCenter = (currentLineIdx + 1) * lineSpacing;
     const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
     
-    // Техническое усиление сигнала оставляем неизменным (*6)
-    const boostedValue = lastVisualValue * 6;
-
-    const offset = boostedValue * dynamicScale;
+    const offset = lastVisualValue * dynamicScale;
     const nextYTop = yCenter - offset;
     const nextYBottom = yCenter + offset;
 
@@ -283,21 +179,30 @@ function renderLoop() {
 
     clearAhead(currentX, currentLineIdx);
 
-    // --- УСПОКОЕННЫЙ ДИЗАЙН (УБРАЛИ КРАСНЫЙ ЦВЕТ И СВЕРХ-ТОЛЩИНУ) ---
-    // Теперь линия всегда фиксированной аккуратной толщины и красивого базового розового цвета
-    const dynamicLineWidth = 1.5 * window.devicePixelRatio;
-    const dynamicColor = "#ff5376"; 
+    // --- ВЫДЕЛЕНИЕ СОБЫТИЙ (МАТЕМАТИКА) ---
+    const absValue = Math.abs(lastVisualValue); // Текущая сила сигнала
+    
+    // 1. Динамическая толщина линии: базовая 1.5px, при максимальном ударе увеличивается до 4.5px
+    const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 3.0) * window.devicePixelRatio;
+    
+    // 2. Динамический цвет: если амплитуда превышает 35% от максимума, красим в неоновый красный
+    let dynamicColor = "#ff5376"; // Базовый розовый
+    if (absValue > maxAmplitude * 0.35) {
+        dynamicColor = "#ff3333"; // Неоновый красный для ударов
+    }
 
-    // 1. Рисуем "ёлочку" сейсмограммы сверху
+    // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
     ctx.beginPath();
     ctx.strokeStyle = dynamicColor; 
     ctx.lineWidth = dynamicLineWidth;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+    
     ctx.moveTo(currentX + currentSpeed, nextYTop);
     ctx.lineTo(currentX + currentSpeed, nextYBottom);
     ctx.stroke();
 
+    // Белый маркер пера
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(currentX + currentSpeed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
 
@@ -306,18 +211,28 @@ function renderLoop() {
     if (currentX >= canvas.width - 10) {
         currentX = startX;
         currentLineIdx++;
+        
         if (currentLineIdx >= totalLines) {
             currentLineIdx = 0;
             drawBackground();
         }
     }
 
-    // 2. Рисуем "водопад" спектрограммы снизу
-    if (rawBuffer.length === FFT_SIZE) {
-        const spectrum = computeFFT(rawBuffer);
-        const numBins = spectrum.length;
-        const binHeight = spectrogramHeight / numBins;
-        
-        ctx.fillStyle = "#111920";
-        ctx.fillRect(specX, spectrogramTop + 1, currentSpeed + 1
+    requestAnimationFrame(renderLoop);
+}
 
+client.on('offline', () => {
+    statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
+    statusText.style.color = "#ffa500";
+    statusText.style.background = "rgba(255, 165, 0, 0.1)";
+});
+
+window.addEventListener('resize', resizeCanvas);
+window.onload = () => {
+    resizeCanvas();
+    requestAnimationFrame(renderLoop);
+};
+</script>
+
+</body>
+</html>
