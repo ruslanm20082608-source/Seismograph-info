@@ -71,7 +71,7 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 6;          // Меньше строк, чтобы влез спектр снизу
+const totalLines = 6;          // Количество строк для барабана
 const maxAmplitude = 10;       
 const speed = 0.08;            // Твоя медленная скорость
 
@@ -80,9 +80,9 @@ let currentLineIdx = 0;
 let currentX = 0;
 
 // --- НАСТРОЙКИ СПЕКТРОГРАММЫ ---
-const SAMPLING_RATE = 40;      // Примерная частота опроса геофона в Гц
-const FFT_SIZE = 64;           // Размер окна БПФ (чем меньше, тем быстрее расчет)
-let rawBuffer = [];            // Буфер для точек спектра
+const SAMPLING_RATE = 40;      
+const FFT_SIZE = 64;           
+let rawBuffer = [];            
 let specX = 70;                
 let spectrogramTop = 0;        
 let spectrogramHeight = 0;     
@@ -95,7 +95,6 @@ function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     
-    // Делим экран: 60% под барабан, остальное под спектрограмму
     const drumHeight = canvas.height * 0.55;
     spectrogramTop = canvas.height * 0.65;
     spectrogramHeight = canvas.height - spectrogramTop - 25 * window.devicePixelRatio;
@@ -156,7 +155,7 @@ function clearAhead(x, lineIdx) {
     ctx.fillRect(x, yCenter - lineSpacing/2, 25 * window.devicePixelRatio, lineSpacing - 2);
 }
 
-// --- ИСПРАВЛЕННАЯ МАТЕМАТИКА БПФ (FFT) ---
+// --- МАТЕМАТИКА БПФ (FFT) ---
 function computeFFT(amplitudes) {
     const N = amplitudes.length;
     if (N <= 1) return amplitudes;
@@ -198,7 +197,7 @@ function computeFFT(amplitudes) {
 
             r[k] = rEven[k] + tReal;
             j[k] = jEven[k] + tImag;
-            r[k + n / 2] = rEven[k] - tReal; // ТУТ БЫЛА ОШИБКА, СЕЙЧАС ВСЕ ИСПРАВЛЕНО!
+            r[k + n / 2] = rEven[k] - tReal; 
             j[k + n / 2] = jEven[k] - tImag;
         }
     }
@@ -248,7 +247,6 @@ client.on('message', (receivedTopic, topicMessage) => {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
         dataBuffer.push(smoothedValue);
         
-        // Буфер для расчета частот спектра
         rawBuffer.push(smoothedValue);
         if (rawBuffer.length > FFT_SIZE) {
             rawBuffer.shift();
@@ -274,7 +272,7 @@ function renderLoop() {
     const yCenter = (currentLineIdx + 1) * lineSpacing;
     const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
     
-    // Встроенный АЦП слабый, поэтому здесь тоже оставим легкое программное усиление (*6)
+    // Техническое усиление сигнала оставляем неизменным (*6)
     const boostedValue = lastVisualValue * 6;
 
     const offset = boostedValue * dynamicScale;
@@ -285,13 +283,10 @@ function renderLoop() {
 
     clearAhead(currentX, currentLineIdx);
 
-    // Подсветка всплесков
-    const absValue = Math.abs(boostedValue);
-    const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 3.0) * window.devicePixelRatio;
-    let dynamicColor = "#ff5376"; 
-    if (absValue > maxAmplitude * 0.2) {
-        dynamicColor = "#ff3333"; 
-    }
+    // --- УСПОКОЕННЫЙ ДИЗАЙН (УБРАЛИ КРАСНЫЙ ЦВЕТ И СВЕРХ-ТОЛЩИНУ) ---
+    // Теперь линия всегда фиксированной аккуратной толщины и красивого базового розового цвета
+    const dynamicLineWidth = 1.5 * window.devicePixelRatio;
+    const dynamicColor = "#ff5376"; 
 
     // 1. Рисуем "ёлочку" сейсмограммы сверху
     ctx.beginPath();
@@ -324,38 +319,5 @@ function renderLoop() {
         const binHeight = spectrogramHeight / numBins;
         
         ctx.fillStyle = "#111920";
-        ctx.fillRect(specX, spectrogramTop + 1, currentSpeed + 1, spectrogramHeight - 2);
+        ctx.fillRect(specX, spectrogramTop + 1, currentSpeed + 1
 
-        for (let i = 0; i < numBins; i++) {
-            // Чувствительность спектра к встроенному АЦП подкручена (/3)
-            const intensity = spectrum[i] / 3; 
-            ctx.fillStyle = getColorForIntensity(intensity);
-            
-            const y = spectrogramTop + spectrogramHeight - (i * binHeight);
-            ctx.fillRect(specX, y - binHeight, currentSpeed + 0.5, binHeight + 0.5);
-        }
-
-        specX += currentSpeed;
-        if (specX >= canvas.width - 10) {
-            specX = startX;
-        }
-    }
-
-    requestAnimationFrame(renderLoop);
-}
-
-client.on('offline', () => {
-    statusText.innerText = "🟠 ОФФЛАЙН — Переподключение...";
-    statusText.style.color = "#ffa500";
-    statusText.style.background = "rgba(255, 165, 0, 0.1)";
-});
-
-window.addEventListener('resize', resizeCanvas);
-window.onload = () => {
-    resizeCanvas();
-    requestAnimationFrame(renderLoop);
-};
-</script>
-
-</body>
-</html>
