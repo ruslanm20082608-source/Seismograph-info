@@ -71,7 +71,7 @@ const canvas = document.getElementById("seismicCanvas");
 const ctx = canvas.getContext("2d");
 
 // --- НАСТРОЙКИ СЕЙСМОГРАММЫ ---
-const totalLines = 12;         
+const totalLines = 12;         // Количество строк на экране
 const maxAmplitude = 10;       // Максимальная амплитуда (ось Y) в мм/с²
 const speed = 0.08;            // Твоя идеальная медленная скорость
 
@@ -80,8 +80,8 @@ let currentLineIdx = 0;
 let currentX = 0;
 
 // --- БУФЕРИЗАЦИЯ ДЛЯ СТАБИЛИЗАЦИИ ПОТОКА ---
-let dataBuffer = [];           
-let lastVisualValue = 0;       
+let dataBuffer = [];           // Сюда складываем точки из MQTT
+let lastVisualValue = 0;       // Последняя отрисованная точка
 
 function resizeCanvas() {
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
@@ -115,7 +115,7 @@ function drawBackground() {
     }
 }
 
-// Эффект луча осциллографа
+// Эффект луча осциллографа (стирание старого перед пером)
 function clearAhead(x, lineIdx) {
     const yCenter = (lineIdx + 1) * lineSpacing;
     ctx.fillStyle = "#111920";
@@ -136,7 +136,7 @@ const options = {
 const client = mqtt.connect(brokerUrl, options);
 
 let smoothedValue = 0;
-const k = 0.3; 
+const k = 0.3; // Фильтрация шумов
 
 client.on('connect', () => {
     statusText.innerText = "🟢 ОНЛАЙН — Идет непрерывная запись...";
@@ -151,6 +151,7 @@ client.on('message', (receivedTopic, topicMessage) => {
         smoothedValue = smoothedValue + k * (rawValue - smoothedValue);
         dataBuffer.push(smoothedValue);
         
+        // Защита от переполнения буфера
         if (dataBuffer.length > 500) {
             dataBuffer.shift();
         }
@@ -162,6 +163,7 @@ function renderLoop() {
     if (dataBuffer.length > 0) {
         lastVisualValue = dataBuffer.shift();
     } else {
+        // Если данные временно не пришли, плавно возвращаем перо к нулю
         lastVisualValue = lastVisualValue * 0.9;
     }
 
@@ -171,7 +173,11 @@ function renderLoop() {
     const yCenter = (currentLineIdx + 1) * lineSpacing;
     const dynamicScale = (lineSpacing * 0.45) / maxAmplitude;
     
-    const offset = lastVisualValue * dynamicScale;
+    // !!! ИСКУССТВЕННОЕ УСИЛЕНИЕ СИГНАЛА !!!
+    // Умножаем значение на 15, чтобы компенсировать слабую чувствительность встроенного АЦП ESP32
+    const boostedValue = lastVisualValue * 15; 
+    
+    const offset = boostedValue * dynamicScale;
     const nextYTop = yCenter - offset;
     const nextYBottom = yCenter + offset;
 
@@ -179,16 +185,16 @@ function renderLoop() {
 
     clearAhead(currentX, currentLineIdx);
 
-    // --- ВЫДЕЛЕНИЕ СОБЫТИЙ (МАТЕМАТИКА) ---
-    const absValue = Math.abs(lastVisualValue); // Текущая сила сигнала
+    // --- ВЫДЕЛЕНИЕ СОБЫТИЙ С УЧЕТОМ УСИЛЕНИЯ ---
+    const absValue = Math.abs(boostedValue); 
     
-    // 1. Динамическая толщина линии: базовая 1.5px, при максимальном ударе увеличивается до 4.5px
-    const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 3.0) * window.devicePixelRatio;
+    // Динамическая толщина (от 1.5px до 5.5px) в зависимости от силы удара
+    const dynamicLineWidth = (1.5 + (absValue / maxAmplitude) * 4.0) * window.devicePixelRatio;
     
-    // 2. Динамический цвет: если амплитуда превышает 35% от максимума, красим в неоновый красный
-    let dynamicColor = "#ff5376"; // Базовый розовый
-    if (absValue > maxAmplitude * 0.35) {
-        dynamicColor = "#ff3333"; // Неоновый красный для ударов
+    // Динамический цвет (порог снижен до 15% для лучшей отзывчивости встроенного АЦП)
+    let dynamicColor = "#ff5376"; 
+    if (absValue > maxAmplitude * 0.15) {
+        dynamicColor = "#ff3333"; // Вспыхивает красным при вибрации стола
     }
 
     // ОТРИСОВКА МОНОЛИТНОГО ЗЕРКАЛЬНОГО ТРЕКА
@@ -198,16 +204,18 @@ function renderLoop() {
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     
+    // Рисуем вертикальный сплошной срез волны
     ctx.moveTo(currentX + currentSpeed, nextYTop);
     ctx.lineTo(currentX + currentSpeed, nextYBottom);
     ctx.stroke();
 
-    // Белый маркер пера
+    // Яркий белый маркер текущего положения пера по центру строки
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(currentX + currentSpeed, yCenter - 1 * window.devicePixelRatio, 2 * window.devicePixelRatio, 2 * window.devicePixelRatio);
 
     currentX += currentSpeed;
 
+    // Переход на новую строку при достижении правого края
     if (currentX >= canvas.width - 10) {
         currentX = startX;
         currentLineIdx++;
